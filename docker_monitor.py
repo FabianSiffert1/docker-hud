@@ -11,7 +11,7 @@ Behavior:
     - No problems  -> a random logo*.jpg (from this script's folder)
                       is shown, chosen once per day and refreshed
                       only on state change or day rollover.
-    - Any problem  -> alert screen shown, but the DISPLAY is only
+    - Any problem  -> "breach.jpg" banner shown, but the DISPLAY is only
                       refreshed every --alert-interval seconds (default
                       600s / 10 min) to avoid hammering the e-ink panel
                       while still checking Docker status every --interval
@@ -23,6 +23,10 @@ Requires:
 Place one or more files named logo.jpg, logo1.jpg, logo2.jpg, etc.
 in the same folder as this script — one is picked at random each
 day and shown (dithered/thresholded to 1-bit) as the "all clear" screen.
+
+Place a file named breach.jpg in the same folder — it's shown as the
+banner at the top of the alert screen instead of plain "!! WARNING !!"
+text. Falls back to the old text banner if breach.jpg is missing.
 
 Usage:
     can be both ttyACM0 or ACM1, find right one
@@ -50,6 +54,10 @@ SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 
 # Matches logo.jpg, logo1.jpg, logo2.jpg, logo23.jpg, etc.
 LOGO_GLOB_PATTERN = os.path.join(SCRIPT_DIR, "logo*.jpg")
+
+# Banner shown at the top of the alert screen, replacing the old
+# rectangle border + "!! WARNING !!" text.
+BREACH_IMAGE_PATH = os.path.join(SCRIPT_DIR, "breach.jpg")
 
 WATCHED_CONTAINERS = [
    "immich_redis",
@@ -186,22 +194,38 @@ def draw_centered_text(draw, y, text, font, fill=0):
 
 
 def render_alert_screen(problems):
+    """
+    Alert screen. Shows breach.jpg as the top banner if it exists
+    (a "BREACH DETECTED" style graphic), falling back to the old
+    rectangle-border + "!! WARNING !!" text if the file is missing —
+    so the script keeps working even if you forget to copy it over.
+    """
     img = Image.new("1", (WIDTH, HEIGHT), 1)
     draw = ImageDraw.Draw(img)
-    big_font = get_font(20)
-    small_font = get_font(12)
 
-    draw.rectangle((0, 0, WIDTH - 1, HEIGHT - 1), outline=0, width=3)
-    draw.text((10, 8), "!! WARNING !!", font=big_font, fill=0)
+    banner_height = 40  # reserved space at the top for the banner
+    y = banner_height + 4
 
-    y = 40
-    for name, status, healthy in problems[:4]:
-        reason = "down" if status != "running" else "unhealthy"
-        draw.text((10, y), f"{name[:18]}: {reason}", font=small_font, fill=0)
-        y += 16
+    if os.path.exists(BREACH_IMAGE_PATH):
+        banner = logo_to_eink(BREACH_IMAGE_PATH, target_size=(WIDTH - 10, banner_height))
+        x = (WIDTH - banner.width) // 2
+        by = (banner_height - banner.height) // 2
+        img.paste(banner, (x, by))
+    else:
+        draw.rectangle((0, 0, WIDTH - 1, HEIGHT - 1), outline=0, width=3)
+        draw_centered_text(draw, 10, "!! WARNING !!", font=get_font(20), fill=0)
 
     timestamp = datetime.now().strftime("%H:%M:%S")
-    draw.text((10, HEIGHT - 14), timestamp, font=get_font(10), fill=0)
+    draw_centered_text(draw, HEIGHT // 3.6, f" {timestamp}", get_font(10))
+
+    draw.line((0, HEIGHT // 2.7, WIDTH, HEIGHT // 2.7), fill=0, width=2)
+
+    small_font = get_font(12)
+    for name, status, healthy in problems[:4]:
+        reason = "down" if status != "running" else "unhealthy"
+        draw_centered_text(draw, y + 10, f"{name[:18]}: {reason}", font=small_font, fill=0)
+        y += 16
+
     return img
 
 
