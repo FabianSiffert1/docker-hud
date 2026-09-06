@@ -8,9 +8,9 @@ and pushes it over USB serial to the Badger, which just displays
 whatever image it receives.
 
 Behavior:
-    - No problems  -> logo.jpg shown ONCE when state becomes OK,
-                      then the display is left alone (no refreshes)
-                      until something actually changes.
+    - No problems  -> a random logo*.jpg (from this script's folder)
+                      is shown, chosen once per day and refreshed
+                      only on state change or day rollover.
     - Any problem  -> alert screen shown, but the DISPLAY is only
                       refreshed every --alert-interval seconds (default
                       600s / 10 min) to avoid hammering the e-ink panel
@@ -20,9 +20,9 @@ Behavior:
 Requires:
     pip install docker pillow pyserial
 
-Place a file called logo.jpg in the same folder as this script —
-it will be dithered/thresholded to 1-bit and shown as the "all clear"
-screen instead of the old smiley.
+Place one or more files named logo.jpg, logo1.jpg, logo2.jpg, etc.
+in the same folder as this script — one is picked at random each
+day and shown (dithered/thresholded to 1-bit) as the "all clear" screen.
 
 Usage:
     can be both ttyACM0 or ACM1, find right one
@@ -30,7 +30,9 @@ Usage:
 """
 
 import argparse
+import glob
 import os
+import random
 import struct
 import sys
 import time
@@ -42,10 +44,12 @@ from PIL import Image, ImageDraw, ImageFont
 
 WIDTH, HEIGHT = 296, 128
 
-# Path to the logo shown on the "all clear" screen. Relative to this
-# script's own folder, so it works regardless of the working directory
-# the script is launched from (e.g. via systemd's WorkingDirectory).
-LOGO_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "logo.jpg")
+# Folder this script lives in — used to resolve logo/font paths regardless
+# of the working directory the script is launched from.
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+
+# Matches logo.jpg, logo1.jpg, logo2.jpg, logo23.jpg, etc.
+LOGO_GLOB_PATTERN = os.path.join(SCRIPT_DIR, "logo*.jpg")
 
 WATCHED_CONTAINERS = [
    "immich_redis",
@@ -84,6 +88,31 @@ def logo_to_eink(path, target_size):
     return img_1bit
 
 
+def get_daily_logo_path():
+    """
+    Picks one logo*.jpg from the script's folder, deterministically
+    based on today's date — so the choice stays the same all day, but
+    a new pick happens on a new day. No state file needed to remember
+    yesterday's choice, since the date itself is the seed.
+    Returns None if no logo*.jpg files are found.
+    """
+    candidates = sorted(glob.glob(LOGO_GLOB_PATTERN))
+    if not candidates:
+        return None
+
+    today_seed = datetime.now().date().toordinal()
+    rng = random.Random(today_seed)
+    return rng.choice(candidates)
+
+
+def list_logos():
+    """
+    Returns all logo*.jpg files found next to this script, sorted.
+    Handy for previewing: list_logos()[2] gives you the 3rd one, etc.
+    """
+    return sorted(glob.glob(LOGO_GLOB_PATTERN))
+
+
 def get_container_statuses(client, watched):
     results = []
     containers = {c.name: c for c in client.containers.list(all=True)}
@@ -115,24 +144,33 @@ def is_problem(status, healthy):
     return False
 
 
-def render_all_clear_screen():
+def render_all_clear_screen(logo_path_override=None):
     """
-    All-clear screen. Shows logo.jpg centered, full-size. Falls back
-    to a plain text message if the logo file is missing, so the
-    script doesn't crash if you forget to copy it over.
+    All-clear screen. Shows one of the logo*.jpg files, chosen
+    deterministically for today's date (see get_daily_logo_path),
+    centered and scaled to fit. Falls back to the X_X text screen if
+    no logo files are found, so the script doesn't crash if you
+    forget to copy any over.
+
+    Pass logo_path_override to force a specific logo file instead of
+    the daily pick — handy for previewing individual logos in the
+    scratchpad without waiting for the date-based rotation to land
+    on the one you want to check.
     """
     img = Image.new("1", (WIDTH, HEIGHT), 1)
     draw = ImageDraw.Draw(img)
 
-    if os.path.exists(LOGO_PATH):
+    logo_path = logo_path_override or get_daily_logo_path()
+
+    if logo_path:
         # Leave a little room at the bottom for the timestamp.
-        logo = logo_to_eink(LOGO_PATH, target_size=(WIDTH - 10, HEIGHT - 16))
+        logo = logo_to_eink(logo_path, target_size=(WIDTH - 10, HEIGHT - 16))
         x = (WIDTH - logo.width) // 2
         y = ((HEIGHT - 16) - logo.height) // 2
         img.paste(logo, (x, y))
     else:
-        draw_centered_text(draw , HEIGHT // 2 - 26, f"X_X", get_font(30))
-        draw_centered_text(draw, HEIGHT // 2 - 8, f"logo.jpg missing", get_font(10))
+        draw_centered_text(draw, HEIGHT // 2 - 26, "X_X", get_font(30))
+        draw_centered_text(draw, HEIGHT // 2 - 8, "no logo*.jpg found", get_font(10))
 
 #   remove comments if you want a timestamp
 #    timestamp = datetime.now().strftime("%H:%M:%S")
@@ -216,6 +254,9 @@ def main():
     last_alert_push = 0.0
     # Tracks the last state actually pushed to the display: "ok", "alert", or None.
     last_pushed_state = None
+    # Tracks the date we last showed the all-clear logo, so a new day
+    # triggers a refresh (new daily logo) even if nothing else changed.
+    last_ok_date = None
 
     while True:
         try:
@@ -223,6 +264,7 @@ def main():
             problems = [(n, s, h) for n, s, h in statuses if is_problem(s, h)]
 
             now = time.time()
+            today = datetime.now().date()
 
             if problems:
                 print(f"[{datetime.now().isoformat(timespec='seconds')}] ALERT: {problems}")
@@ -238,11 +280,14 @@ def main():
             else:
                 print(f"[{datetime.now().isoformat(timespec='seconds')}] OK ({len(statuses)} containers)")
 
-                # Only push when TRANSITIONING into OK state, not on every check.
-                if last_pushed_state != "ok":
+                # Push when TRANSITIONING into OK state, OR when the day
+                # has rolled over since we last showed the all-clear logo
+                # (so the daily logo rotation actually takes effect).
+                if last_pushed_state != "ok" or last_ok_date != today:
                     img = render_all_clear_screen()
                     send_frame(ser, img)
                     last_pushed_state = "ok"
+                    last_ok_date = today
                 else:
                     print("  (already showing all-clear, skipping refresh)")
 

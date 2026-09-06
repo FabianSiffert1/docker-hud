@@ -7,7 +7,10 @@ import docker_monitor
 importlib.reload(docker_monitor)
 import matplotlib.pyplot as plt
 
-img = docker_monitor.render_all_clear_screen()
+logos = docker_monitor.list_logos()
+print(logos)  # see what's available and their index
+
+img = docker_monitor.render_all_clear_screen(logo_path_override=logos[6])  # change index to try others
 plt.imshow(img, cmap="gray")
 plt.axis("off")
 plt.show()
