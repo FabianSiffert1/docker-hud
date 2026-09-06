@@ -1,0 +1,20 @@
+# A service that runs the docker_monitor
+# replace $USER with your user and make sure that the paths are correct
+# make sure that the correct device is selected in --port. needs to point at your display. Oftentimes along the lines of /dev/ttyACM${NUMBER}
+# the poll rate is set via --interval
+
+[Unit]
+Description=E-Ink Docker Health Monitor
+After=docker.service network.target
+Requires=docker.service
+
+[Service]
+Type=simple
+User=$USER
+WorkingDirectory=%h/docker-hud
+ExecStart=%h/docker-hud/docker-hud-env/bin/python3 %h/docker-hud/docker-monitor.py --port /dev/ttyACM1 --interval 60
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
