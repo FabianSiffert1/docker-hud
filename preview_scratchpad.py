@@ -1,6 +1,7 @@
 # %%
 # Preview the container list view, including a selection cursor
 # and an armed-restart state
+from matplotlib import pyplot as plt
 import docker_monitor
 
 fake_statuses = [
