@@ -63,7 +63,8 @@ WIDTH, HEIGHT = 296, 128
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 LOGO_GLOB_PATTERN = os.path.join(SCRIPT_DIR, "logo*.jpg")
-BREACH_IMAGE_PATH = os.path.join(SCRIPT_DIR, "breach.jpg")
+BREACH_IMAGE_PATH = os.path.join(SCRIPT_DIR, "breach.jpg") # warning screen header
+BREACH_ICON_PATH = "mgsAlert.jpg"   # exclamation icon, shown on both sides of the breach logo on the warning screen
 
 WATCHED_CONTAINERS = [
    "immich_redis",
@@ -190,6 +191,7 @@ def render_alert_screen(problems, snoozed_until=None):
     draw = ImageDraw.Draw(img)
 
     banner_height = 40
+    padding = 6
     y = banner_height + 4
 
     if os.path.exists(BREACH_IMAGE_PATH):
@@ -199,22 +201,31 @@ def render_alert_screen(problems, snoozed_until=None):
         img.paste(banner, (x, by))
     else:
         draw.rectangle((0, 0, WIDTH - 1, HEIGHT - 1), outline=0, width=3)
-        draw.text((10, 8), "!! WARNING !!", font=get_font(20), fill=0)
+        draw_centered_text(draw, 8, "!! WARNING !!", get_font(20))
+
+    # add the alert icon on both sides of the banner line
+    icon_size = banner_height - 8
+    icon_y = (banner_height - icon_size) // 2
+
+    if os.path.exists(BREACH_ICON_PATH):
+        alert_icon = logo_to_eink(BREACH_ICON_PATH, target_size=(icon_size, icon_size))
+        img.paste(alert_icon, (padding, icon_y))                      # left side
+        rx = WIDTH - alert_icon.width - padding
+        img.paste(alert_icon, (rx, icon_y))                            # right side
 
     small_font = get_font(12)
     for name, status, healthy in problems[:4]:
         reason = "down" if status != "running" else "unhealthy"
-        draw.text((10, y), f"{name[:18]}: {reason}", font=small_font, fill=0)
+        draw_centered_text(draw, y, f"{name[:18]}: {reason}", small_font)
         y += 16
 
     if snoozed_until:
         remaining_min = max(0, int((snoozed_until - time.time()) / 60) + 1)
-        draw.text((10, HEIGHT - 26), f"snoozed ({remaining_min}m left)", font=get_font(10), fill=0)
+        draw_centered_text(draw, HEIGHT - 26, f"snoozed ({remaining_min}m left)", get_font(10))
 
     timestamp = datetime.now().strftime("%H:%M:%S")
-    draw.text((10, HEIGHT - 14), timestamp, font=get_font(10), fill=0)
+    draw_centered_text(draw, HEIGHT - 14, timestamp, get_font(10))
     return img
-
 
 def render_container_list_screen(statuses, selected_idx=0, scroll_offset=0, restart_armed_name=None):
     img = Image.new("1", (WIDTH, HEIGHT), 1)
