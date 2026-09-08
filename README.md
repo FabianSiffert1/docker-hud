@@ -148,13 +148,6 @@ systemctl status docker-monitor.service
 journalctl -u docker-monitor.service -f
 ```
 
-## Automatic apt updates (optional, NUC-wide)
-
-```bash
-sudo apt install unattended-upgrades
-sudo dpkg-reconfigure --priority=low unattended-upgrades
-```
-
 ## License
 
 MIT -- see `LICENSE`. Logo and breach image files are excluded from
