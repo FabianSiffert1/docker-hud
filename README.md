@@ -6,6 +6,10 @@ screen when something's down, and 5 physical buttons for switching
 views, refreshing, scrolling, snoozing alerts, and restarting a
 container.
 
+<p align="center">
+  <img src="docker-hud.jpg" width="300" height="300">
+</p>
+
 ## Architecture
 
 ```
@@ -29,6 +33,7 @@ Badger's dedicated "data" port, separate from its REPL console).
 - NUC (or any always-on Linux box) running Docker
 - Pimoroni Badger 2040 (non-W), running CircuitPython
 - USB-C to Micro-USB (or matching) cable between them
+- Your own collection of logos and breach warning images to display
 
 ## NUC Setup
 
