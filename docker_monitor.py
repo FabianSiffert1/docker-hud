@@ -96,19 +96,9 @@ class Component:
     """
 
     def measure(self, draw, width, height):
-        """
-        Return (width, height) required by this component.
-
-        Subclasses can override this if they need custom measurement.
-        """
         return width, 0
 
     def render(self, draw, x, y, width, height):
-        """
-        Render the component.
-
-        Returns the height consumed.
-        """
         return 0
 
 
@@ -127,11 +117,20 @@ class Text(Component):
         self.fill = fill
 
     def measure(self, draw, width, height):
-        bbox = draw.textbbox((0, 0), self.text, font=self.font)
+        bbox = draw.textbbox(
+            (0, 0),
+            self.text,
+            font=self.font,
+        )
+
         return width, bbox[3] - bbox[1]
 
     def render(self, draw, x, y, width, height):
-        bbox = draw.textbbox((0, 0), self.text, font=self.font)
+        bbox = draw.textbbox(
+            (0, 0),
+            self.text,
+            font=self.font,
+        )
 
         text_width = bbox[2] - bbox[0]
         text_height = bbox[3] - bbox[1]
@@ -176,12 +175,6 @@ class Divider(Component):
 
 
 class Spacer(Component):
-    """
-    Flexible empty space.
-
-    A Spacer inside a Column consumes whatever vertical space is left.
-    """
-
     def __init__(self, weight=1):
         self.weight = weight
 
@@ -212,31 +205,26 @@ class Bitmap(Component):
         else:
             image_x = x
 
-        # Bitmap needs access to the actual image canvas.
-        # The parent Column passes the image through render context.
-        canvas = getattr(draw, "_layout_canvas", None)
+        canvas = getattr(
+            draw,
+            "_layout_canvas",
+            None,
+        )
 
         if canvas is None:
-            raise RuntimeError("Bitmap requires a layout canvas")
+            raise RuntimeError(
+                "Bitmap requires a layout canvas"
+            )
 
-        canvas.paste(self.image, (image_x, y))
+        canvas.paste(
+            self.image,
+            (image_x, y),
+        )
 
         return self.image.height
 
 
 class Row(Component):
-    """
-    Horizontal layout.
-
-    Example:
-
-        Row([
-            Text("Memory"),
-            Spacer(),
-            Text("42%"),
-        ])
-    """
-
     def __init__(
         self,
         children,
@@ -251,7 +239,10 @@ class Row(Component):
         self.vertical_align = vertical_align
 
     def measure(self, draw, width, height):
-        content_width = max(0, width - self.padding * 2)
+        content_width = max(
+            0,
+            width - self.padding * 2,
+        )
 
         fixed_width = 0
         max_height = 0
@@ -269,12 +260,21 @@ class Row(Component):
             )
 
             fixed_width += child_width
-            max_height = max(max_height, child_height)
+            max_height = max(
+                max_height,
+                child_height,
+            )
 
-        fixed_width += self.gap * max(0, len(self.children) - 1)
+        fixed_width += self.gap * max(
+            0,
+            len(self.children) - 1,
+        )
 
         return (
-            min(width, fixed_width + self.padding * 2),
+            min(
+                width,
+                fixed_width + self.padding * 2,
+            ),
             max_height + self.padding * 2,
         )
 
@@ -284,7 +284,6 @@ class Row(Component):
         content_width = width - self.padding * 2
         content_height = height - self.padding * 2
 
-        # First determine fixed widths.
         fixed_width = 0
         spacer_weight = 0
         child_sizes = []
@@ -292,7 +291,9 @@ class Row(Component):
         for child in self.children:
             if isinstance(child, Spacer):
                 spacer_weight += child.weight
-                child_sizes.append((child, 0, 0))
+                child_sizes.append(
+                    (child, 0, 0)
+                )
                 continue
 
             child_width, child_height = child.measure(
@@ -302,12 +303,25 @@ class Row(Component):
             )
 
             fixed_width += child_width
-            child_sizes.append((child, child_width, child_height))
 
-        gaps = self.gap * max(0, len(self.children) - 1)
+            child_sizes.append(
+                (
+                    child,
+                    child_width,
+                    child_height,
+                )
+            )
+
+        gaps = self.gap * max(
+            0,
+            len(self.children) - 1,
+        )
+
         remaining_width = max(
             0,
-            content_width - fixed_width - gaps,
+            content_width
+            - fixed_width
+            - gaps,
         )
 
         spacer_width = (
@@ -320,15 +334,28 @@ class Row(Component):
         max_height = 0
 
         for child, child_width, child_height in child_sizes:
+
             if isinstance(child, Spacer):
-                cursor_x += int(spacer_width * child.weight)
+                cursor_x += int(
+                    spacer_width * child.weight
+                )
                 continue
 
             if self.vertical_align == "center":
-                child_y = content_y + (content_height - child_height) // 2
+                child_y = (
+                    content_y
+                    + (
+                        content_height
+                        - child_height
+                    ) // 2
+                )
 
             elif self.vertical_align == "bottom":
-                child_y = content_y + content_height - child_height
+                child_y = (
+                    content_y
+                    + content_height
+                    - child_height
+                )
 
             else:
                 child_y = content_y
@@ -341,29 +368,20 @@ class Row(Component):
                 child_height,
             )
 
-            cursor_x += child_width + self.gap
-            max_height = max(max_height, child_height)
+            cursor_x += (
+                child_width
+                + self.gap
+            )
+
+            max_height = max(
+                max_height,
+                child_height,
+            )
 
         return max_height + self.padding * 2
 
 
 class Column(Component):
-    """
-    Vertical layout.
-
-    Children are rendered from top to bottom.
-
-    Example:
-
-        Column([
-            Text("NUC Stats", get_font(14), align="center"),
-            Divider(),
-            Text("Memory: 42%", get_font(12)),
-            Spacer(),
-            Text("12:42:00", get_font(10), align="center"),
-        ])
-    """
-
     def __init__(
         self,
         children,
@@ -391,7 +409,6 @@ class Column(Component):
             height - self.padding * 2,
         )
 
-        # Measure all non-spacer children first.
         fixed_height = 0
         spacer_weight = 0
         child_sizes = []
@@ -418,7 +435,9 @@ class Column(Component):
 
         remaining_height = max(
             0,
-            content_height - fixed_height - gaps,
+            content_height
+            - fixed_height
+            - gaps,
         )
 
         spacer_height = (
@@ -430,46 +449,17 @@ class Column(Component):
         cursor_y = content_y
 
         for child, child_height in child_sizes:
-
             if isinstance(child, Spacer):
                 cursor_y += int(
                     spacer_height * child.weight
                 )
                 continue
 
-            if self.horizontal_align == "center":
-                child_x = (
-                    content_x
-                    + (content_width - child.measure(
-                        draw,
-                        content_width,
-                        content_height,
-                    )[0]) // 2
-                )
-
-            elif self.horizontal_align == "right":
-                child_width = child.measure(
-                    draw,
-                    content_width,
-                    content_height,
-                )[0]
-
-                child_x = (
-                    content_x
-                    + content_width
-                    - child_width
-                )
-
-            else:
-                child_x = content_x
-
-            child_width = content_width
-
             child.render(
                 draw,
-                child_x,
+                content_x,
                 cursor_y,
-                child_width,
+                content_width,
                 child_height,
             )
 
@@ -480,11 +470,7 @@ class Column(Component):
             cursor_y - y + self.padding,
         )
 
-
 def render_layout(layout):
-    """
-    Render a declarative layout onto a 1-bit e-ink canvas.
-    """
     img = Image.new(
         "1",
         (WIDTH, HEIGHT),
@@ -493,7 +479,6 @@ def render_layout(layout):
 
     draw = ImageDraw.Draw(img)
 
-    # Bitmap needs access to the underlying image.
     draw._layout_canvas = img
 
     layout.render(
@@ -513,7 +498,11 @@ def render_layout(layout):
 
 def logo_to_eink(path, target_size):
     img = Image.open(path).convert("L")
-    img.thumbnail(target_size, Image.LANCZOS)
+
+    img.thumbnail(
+        target_size,
+        Image.LANCZOS,
+    )
 
     img_1bit = img.point(
         lambda p: 255 if p > 128 else 0
@@ -530,7 +519,11 @@ def get_daily_logo_path():
     if not candidates:
         return None
 
-    today_seed = datetime.now().date().toordinal()
+    today_seed = (
+        datetime.now()
+        .date()
+        .toordinal()
+    )
 
     rng = random.Random(today_seed)
 
@@ -588,7 +581,11 @@ def get_container_statuses(client, watched):
             )
 
         results.append(
-            (name, status, health)
+            (
+                name,
+                status,
+                health,
+            )
         )
 
     return results
@@ -609,13 +606,8 @@ def is_problem(status, healthy):
 # ============================================================================
 
 def read_nuc_stats():
-    """
-    Read basic system stats using only the standard library.
-    """
-
     stats = {}
 
-    # Uptime
     try:
         with open("/proc/uptime") as f:
             uptime_seconds = float(
@@ -641,7 +633,6 @@ def read_nuc_stats():
     except Exception:
         stats["uptime"] = "N/A"
 
-    # Disk
     try:
         import shutil
 
@@ -657,9 +648,10 @@ def read_nuc_stats():
     except Exception:
         stats["disk"] = "N/A"
 
-    # Load
     try:
-        load1, load5, load15 = os.getloadavg()
+        load1, load5, load15 = (
+            os.getloadavg()
+        )
 
         stats["load"] = (
             f"{load1:.2f} / "
@@ -670,7 +662,6 @@ def read_nuc_stats():
     except Exception:
         stats["load"] = "N/A"
 
-    # Memory
     try:
         with open("/proc/meminfo") as f:
             meminfo = {}
@@ -698,7 +689,11 @@ def read_nuc_stats():
         )
 
         used_pct = (
-            (1 - avail_kb / total_kb) * 100
+            (
+                1
+                - avail_kb / total_kb
+            )
+            * 100
             if total_kb
             else 0
         )
@@ -710,10 +705,10 @@ def read_nuc_stats():
     except Exception:
         stats["memory"] = "N/A"
 
-    # Temperature
     try:
         with open(
-            "/sys/class/thermal/thermal_zone0/temp"
+            "/sys/class/thermal/"
+            "thermal_zone0/temp"
         ) as f:
             temp_c = (
                 int(f.read().strip())
@@ -752,7 +747,7 @@ def stats_screen():
                 get_font(14),
                 align="center",
             ),
-
+            Spacer(),
             Divider(),
 
             Text(
@@ -792,6 +787,7 @@ def stats_screen():
 def container_list_screen(
     statuses,
     selected_idx=0,
+    scroll_offset=0,
     restart_armed_name=None,
 ):
     children = [
@@ -804,13 +800,26 @@ def container_list_screen(
         Divider(),
     ]
 
+    end_idx = min(
+        len(statuses),
+        scroll_offset + CONTAINER_LIST_VISIBLE_ROWS,
+    )
+
     visible = statuses[
-        :CONTAINER_LIST_VISIBLE_ROWS
+        scroll_offset:end_idx
     ]
 
-    for idx, (name, status, healthy) in enumerate(
-        visible
-    ):
+    for visible_idx, (
+        name,
+        status,
+        healthy,
+    ) in enumerate(visible):
+
+        actual_idx = (
+            scroll_offset
+            + visible_idx
+        )
+
         problem = is_problem(
             status,
             healthy,
@@ -824,7 +833,7 @@ def container_list_screen(
 
         cursor = (
             ">"
-            if idx == selected_idx
+            if actual_idx == selected_idx
             else " "
         )
 
@@ -840,15 +849,11 @@ def container_list_screen(
             )
         )
 
-    # Keep the timestamp at the bottom.
     children.extend([
         Spacer(),
         timestamp_component(),
     ])
 
-    # If the list is longer than the screen,
-    # put the position indicator into the header.
-    # For now we simply append it as a small row.
     if len(statuses) > CONTAINER_LIST_VISIBLE_ROWS:
         children.insert(
             1,
@@ -872,7 +877,6 @@ def alert_screen(
 ):
     children = []
 
-    # Banner
     if os.path.exists(
         BREACH_IMAGE_PATH
     ):
@@ -900,7 +904,6 @@ def alert_screen(
             )
         )
 
-    # Problem list
     for name, status, healthy in problems[:4]:
         reason = (
             "down"
@@ -920,7 +923,10 @@ def alert_screen(
         remaining_min = max(
             0,
             int(
-                (snoozed_until - time.time())
+                (
+                    snoozed_until
+                    - time.time()
+                )
                 / 60
             ) + 1,
         )
@@ -966,10 +972,12 @@ def all_clear_screen(
         return Column(
             [
                 Spacer(),
+
                 Bitmap(
                     logo,
                     align="center",
                 ),
+
                 Spacer(),
             ],
             padding=5,
@@ -1023,10 +1031,6 @@ def send_frame(ser, img):
 
 
 def read_pending_buttons(ser):
-    """
-    Non-blocking read of queued button presses.
-    """
-
     presses = []
 
     while ser.in_waiting > 0:
@@ -1047,6 +1051,7 @@ def render_current_view(
     statuses,
     problems,
     selected_container_idx,
+    container_scroll_offset,
     restart_armed_name,
     manual_logo_index,
     snooze_until,
@@ -1055,6 +1060,7 @@ def render_current_view(
         layout = container_list_screen(
             statuses,
             selected_idx=selected_container_idx,
+            scroll_offset=container_scroll_offset,
             restart_armed_name=restart_armed_name,
         )
 
@@ -1122,13 +1128,6 @@ def main():
     )
 
     parser.add_argument(
-        "--alert-interval",
-        type=int,
-        default=600,
-        help="Seconds between alert refreshes",
-    )
-
-    parser.add_argument(
         "--button-poll-interval",
         type=float,
         default=0.2,
@@ -1185,8 +1184,10 @@ def main():
     manual_logo_index = None
 
     selected_container_idx = 0
+    container_scroll_offset = 0
 
     snooze_until = 0.0
+    last_displayed_snooze_minute = None
 
     restart_armed_name = None
     restart_armed_deadline = 0.0
@@ -1213,7 +1214,7 @@ def main():
             for press in read_pending_buttons(ser):
 
                 # ------------------------------------------------------
-                # A = force refresh
+                # A = force Docker check + redraw
                 # ------------------------------------------------------
 
                 if press == b"A":
@@ -1238,6 +1239,7 @@ def main():
                     ]
 
                     selected_container_idx = 0
+                    container_scroll_offset = 0
 
                     needs_redraw = True
 
@@ -1259,6 +1261,8 @@ def main():
                                 now
                                 + args.snooze_minutes * 60
                             )
+
+                            last_displayed_snooze_minute = None
 
                             needs_redraw = True
 
@@ -1333,12 +1337,29 @@ def main():
                         current_view == "containers"
                         and statuses
                     ):
+                        old_idx = (
+                            selected_container_idx
+                        )
+
                         selected_container_idx = max(
                             0,
                             selected_container_idx - 1,
                         )
 
-                        needs_redraw = True
+                        if (
+                            selected_container_idx
+                            != old_idx
+                        ):
+                            # Keep selected item visible.
+                            if (
+                                selected_container_idx
+                                < container_scroll_offset
+                            ):
+                                container_scroll_offset = (
+                                    selected_container_idx
+                                )
+
+                            needs_redraw = True
 
                     elif (
                         current_view == "auto"
@@ -1369,12 +1390,41 @@ def main():
                         current_view == "containers"
                         and statuses
                     ):
+                        old_idx = (
+                            selected_container_idx
+                        )
+
                         selected_container_idx = min(
                             len(statuses) - 1,
                             selected_container_idx + 1,
                         )
 
-                        needs_redraw = True
+                        if (
+                            selected_container_idx
+                            != old_idx
+                        ):
+                            # Keep selected item visible.
+                            max_scroll = max(
+                                0,
+                                len(statuses)
+                                - CONTAINER_LIST_VISIBLE_ROWS,
+                            )
+
+                            if (
+                                selected_container_idx
+                                >= (
+                                    container_scroll_offset
+                                    + CONTAINER_LIST_VISIBLE_ROWS
+                                )
+                            ):
+                                container_scroll_offset = min(
+                                    max_scroll,
+                                    selected_container_idx
+                                    - CONTAINER_LIST_VISIBLE_ROWS
+                                    + 1,
+                                )
+
+                            needs_redraw = True
 
                     elif (
                         current_view == "auto"
@@ -1413,15 +1463,41 @@ def main():
                 needs_redraw = True
 
             # ----------------------------------------------------------
-            # Snooze timeout
+            # Snooze timeout / countdown
             # ----------------------------------------------------------
 
-            if (
-                snooze_until
-                and now >= snooze_until
-            ):
-                snooze_until = 0.0
-                needs_redraw = True
+            if snooze_until:
+
+                if now >= snooze_until:
+                    snooze_until = 0.0
+                    last_displayed_snooze_minute = None
+                    needs_redraw = True
+
+                elif (
+                    current_view == "auto"
+                    and problems
+                ):
+                    # Only redraw when the visible "Xm left"
+                    # value actually changes.
+                    remaining_minute = max(
+                        0,
+                        int(
+                            (
+                                snooze_until
+                                - now
+                            )
+                            / 60
+                        ) + 1,
+                    )
+
+                    if (
+                        remaining_minute
+                        != last_displayed_snooze_minute
+                    ):
+                        last_displayed_snooze_minute = (
+                            remaining_minute
+                        )
+                        needs_redraw = True
 
             # ----------------------------------------------------------
             # Docker polling
@@ -1436,24 +1512,47 @@ def main():
 
                 last_check_time = now
 
-                statuses = (
+                new_statuses = (
                     get_container_statuses(
                         client,
                         WATCHED_CONTAINERS,
                     )
                 )
 
-                problems = [
-                    (name, status, healthy)
+                new_problems = [
+                    (
+                        name,
+                        status,
+                        healthy,
+                    )
                     for name, status, healthy
-                    in statuses
+                    in new_statuses
                     if is_problem(
                         status,
                         healthy,
                     )
                 ]
 
-                needs_redraw = True
+                statuses_changed = (
+                    new_statuses != statuses
+                )
+
+                problems_changed = (
+                    new_problems != problems
+                )
+
+                statuses = new_statuses
+                problems = new_problems
+
+                # Only redraw if the information visible on the
+                # display actually changed.
+                if (
+                    statuses_changed
+                    or problems_changed
+                    or force_refresh
+                ):
+                    needs_redraw = True
+
                 force_refresh = False
 
             # ----------------------------------------------------------
@@ -1468,6 +1567,9 @@ def main():
                     problems=problems,
                     selected_container_idx=(
                         selected_container_idx
+                    ),
+                    container_scroll_offset=(
+                        container_scroll_offset
                     ),
                     restart_armed_name=(
                         restart_armed_name

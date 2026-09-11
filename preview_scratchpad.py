@@ -35,6 +35,7 @@ preview(
     docker_monitor.all_clear_screen()
 )
 
+# %%
 preview(
     docker_monitor.container_list_screen(
         fake_statuses,
