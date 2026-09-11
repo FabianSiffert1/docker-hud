@@ -161,6 +161,7 @@ def main():
 
                     selected_container_idx = 0
                     container_scroll_offset = 0
+                    manual_logo_index = None
 
                     needs_redraw = True
 
