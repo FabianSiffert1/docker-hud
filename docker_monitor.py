@@ -2,47 +2,20 @@
 """
 docker_monitor.py
 
-Runs on the NUC. Polls Docker container status/health, renders a
-monochrome bitmap sized for the Badger 2040's 296x128 e-ink display,
-and pushes it over USB serial to the Badger. The Badger also sends
-button-press bytes back over the same connection.
+Docker monitor for a Badger 2040 296x128 e-ink display.
 
-Views (cycled with button B):
-    "auto"       - normal all-clear (logo) / breach alert behavior
-    "containers" - manual scrollable list of every watched container
-    "stats"      - basic NUC system stats (uptime, disk, load, mem)
-
-Button mapping:
-    A       - force an immediate Docker check + redraw
-    B       - cycle view: auto -> containers -> stats -> auto ...
-    C       - context action:
-                "auto" + active alert  -> snooze the alert for
-                                           --snooze-minutes (default 30)
-                "containers"           -> arm restart on the selected
-                                           container; press C again
-                                           within 10s to confirm and
-                                           actually restart it
-                "stats"                -> no-op
-    UP/DOWN - context action:
-                "containers" -> move the selection cursor
-                "auto"       -> manually cycle through logo*.jpg
-                                 (only meaningful while healthy)
-                "stats"      -> no-op
+The UI uses a small declarative layout system inspired by Jetpack Compose:
+    Column
+    Row
+    Text
+    Bitmap
+    Divider
+    Spacer
 
 Requires:
     pip install docker pillow pyserial
 
-Place one or more files named logo.jpg, logo1.jpg, logo2.jpg, etc.
-in the same folder as this script — one is picked at random each
-day and shown (dithered/thresholded to 1-bit) as the "all clear" screen,
-unless manually overridden via UP/DOWN in the "auto" view.
-
-Place a file named breach.jpg in the same folder — it's shown as the
-banner at the top of the alert screen instead of plain "!! WARNING !!"
-text. Falls back to the old text banner if breach.jpg is missing.
-
 Usage:
-    can be both ttyACM0 or ACM1, find right one
     python3 docker_monitor.py --port /dev/ttyACM1 --interval 60
 """
 
@@ -59,88 +32,564 @@ import docker
 import serial
 from PIL import Image, ImageDraw, ImageFont
 
+
+# ============================================================================
+# Configuration
+# ============================================================================
+
 WIDTH, HEIGHT = 296, 128
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+
 LOGO_GLOB_PATTERN = os.path.join(SCRIPT_DIR, "logo*.jpg")
-BREACH_IMAGE_PATH = os.path.join(SCRIPT_DIR, "breach.jpg") # warning screen header
-BREACH_ICON_PATH = "mgsAlert.jpg"   # exclamation icon, shown on both sides of the breach logo on the warning screen
+BREACH_IMAGE_PATH = os.path.join(SCRIPT_DIR, "breach.jpg")
+BREACH_ICON_PATH = os.path.join(SCRIPT_DIR, "mgsAlert.jpg")
 
 WATCHED_CONTAINERS = [
-   "immich_redis",
-   "watchtower",
-   "mosquitto",
-   "homeassistant",
-   "zigbee2mqtt",
-   "immich_server",
-   "immich_postgres",
-   "immich_machine_learning",
+    "immich_redis",
+    "watchtower",
+    "mosquitto",
+    "homeassistant",
+    "zigbee2mqtt",
+    "immich_server",
+    "immich_postgres",
+    "immich_machine_learning",
 ]
 
 VIEWS = ["auto", "containers", "stats"]
-CONTAINER_LIST_VISIBLE_ROWS = 6  # how many rows fit on screen at once
+
+CONTAINER_LIST_VISIBLE_ROWS = 6
 RESTART_CONFIRM_WINDOW_SECONDS = 10
 DEFAULT_SNOOZE_MINUTES = 30
 
 BUTTON_BYTES = {b"A", b"B", b"C", b"U", b"D"}
 
 
-# ---------------------------------------------------------------- fonts/logos
+# ============================================================================
+# Fonts
+# ============================================================================
 
 def get_font(size=14):
     candidates = [
         "/usr/share/fonts/truetype/dejavu/DejaVuSansMono-Bold.ttf",
         "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
     ]
+
     for path in candidates:
         try:
             return ImageFont.truetype(path, size)
         except OSError:
             continue
+
     return ImageFont.load_default()
 
+
+# ============================================================================
+# Small declarative layout system
+# ============================================================================
+
+class Component:
+    """
+    Base class for everything that can be rendered.
+
+    render() returns the height actually consumed by the component.
+    """
+
+    def measure(self, draw, width, height):
+        """
+        Return (width, height) required by this component.
+
+        Subclasses can override this if they need custom measurement.
+        """
+        return width, 0
+
+    def render(self, draw, x, y, width, height):
+        """
+        Render the component.
+
+        Returns the height consumed.
+        """
+        return 0
+
+
+class Text(Component):
+    def __init__(
+        self,
+        text,
+        font,
+        *,
+        align="left",
+        fill=0,
+    ):
+        self.text = text
+        self.font = font
+        self.align = align
+        self.fill = fill
+
+    def measure(self, draw, width, height):
+        bbox = draw.textbbox((0, 0), self.text, font=self.font)
+        return width, bbox[3] - bbox[1]
+
+    def render(self, draw, x, y, width, height):
+        bbox = draw.textbbox((0, 0), self.text, font=self.font)
+
+        text_width = bbox[2] - bbox[0]
+        text_height = bbox[3] - bbox[1]
+
+        if self.align == "center":
+            text_x = x + (width - text_width) // 2
+
+        elif self.align == "right":
+            text_x = x + width - text_width
+
+        else:
+            text_x = x
+
+        draw.text(
+            (text_x, y),
+            self.text,
+            font=self.font,
+            fill=self.fill,
+        )
+
+        return text_height
+
+
+class Divider(Component):
+    def __init__(self, thickness=2, margin=0):
+        self.thickness = thickness
+        self.margin = margin
+
+    def measure(self, draw, width, height):
+        return width, self.thickness + self.margin * 2
+
+    def render(self, draw, x, y, width, height):
+        line_y = y + self.margin
+
+        draw.line(
+            (x, line_y, x + width, line_y),
+            fill=0,
+            width=self.thickness,
+        )
+
+        return self.thickness + self.margin * 2
+
+
+class Spacer(Component):
+    """
+    Flexible empty space.
+
+    A Spacer inside a Column consumes whatever vertical space is left.
+    """
+
+    def __init__(self, weight=1):
+        self.weight = weight
+
+    def measure(self, draw, width, height):
+        return width, 0
+
+
+class Bitmap(Component):
+    def __init__(
+        self,
+        image,
+        *,
+        align="center",
+    ):
+        self.image = image
+        self.align = align
+
+    def measure(self, draw, width, height):
+        return self.image.width, self.image.height
+
+    def render(self, draw, x, y, width, height):
+        if self.align == "center":
+            image_x = x + (width - self.image.width) // 2
+
+        elif self.align == "right":
+            image_x = x + width - self.image.width
+
+        else:
+            image_x = x
+
+        # Bitmap needs access to the actual image canvas.
+        # The parent Column passes the image through render context.
+        canvas = getattr(draw, "_layout_canvas", None)
+
+        if canvas is None:
+            raise RuntimeError("Bitmap requires a layout canvas")
+
+        canvas.paste(self.image, (image_x, y))
+
+        return self.image.height
+
+
+class Row(Component):
+    """
+    Horizontal layout.
+
+    Example:
+
+        Row([
+            Text("Memory"),
+            Spacer(),
+            Text("42%"),
+        ])
+    """
+
+    def __init__(
+        self,
+        children,
+        *,
+        gap=0,
+        padding=0,
+        vertical_align="top",
+    ):
+        self.children = children
+        self.gap = gap
+        self.padding = padding
+        self.vertical_align = vertical_align
+
+    def measure(self, draw, width, height):
+        content_width = max(0, width - self.padding * 2)
+
+        fixed_width = 0
+        max_height = 0
+        spacer_count = 0
+
+        for child in self.children:
+            if isinstance(child, Spacer):
+                spacer_count += child.weight
+                continue
+
+            child_width, child_height = child.measure(
+                draw,
+                content_width,
+                height,
+            )
+
+            fixed_width += child_width
+            max_height = max(max_height, child_height)
+
+        fixed_width += self.gap * max(0, len(self.children) - 1)
+
+        return (
+            min(width, fixed_width + self.padding * 2),
+            max_height + self.padding * 2,
+        )
+
+    def render(self, draw, x, y, width, height):
+        content_x = x + self.padding
+        content_y = y + self.padding
+        content_width = width - self.padding * 2
+        content_height = height - self.padding * 2
+
+        # First determine fixed widths.
+        fixed_width = 0
+        spacer_weight = 0
+        child_sizes = []
+
+        for child in self.children:
+            if isinstance(child, Spacer):
+                spacer_weight += child.weight
+                child_sizes.append((child, 0, 0))
+                continue
+
+            child_width, child_height = child.measure(
+                draw,
+                content_width,
+                content_height,
+            )
+
+            fixed_width += child_width
+            child_sizes.append((child, child_width, child_height))
+
+        gaps = self.gap * max(0, len(self.children) - 1)
+        remaining_width = max(
+            0,
+            content_width - fixed_width - gaps,
+        )
+
+        spacer_width = (
+            remaining_width / spacer_weight
+            if spacer_weight
+            else 0
+        )
+
+        cursor_x = content_x
+        max_height = 0
+
+        for child, child_width, child_height in child_sizes:
+            if isinstance(child, Spacer):
+                cursor_x += int(spacer_width * child.weight)
+                continue
+
+            if self.vertical_align == "center":
+                child_y = content_y + (content_height - child_height) // 2
+
+            elif self.vertical_align == "bottom":
+                child_y = content_y + content_height - child_height
+
+            else:
+                child_y = content_y
+
+            child.render(
+                draw,
+                cursor_x,
+                child_y,
+                child_width,
+                child_height,
+            )
+
+            cursor_x += child_width + self.gap
+            max_height = max(max_height, child_height)
+
+        return max_height + self.padding * 2
+
+
+class Column(Component):
+    """
+    Vertical layout.
+
+    Children are rendered from top to bottom.
+
+    Example:
+
+        Column([
+            Text("NUC Stats", get_font(14), align="center"),
+            Divider(),
+            Text("Memory: 42%", get_font(12)),
+            Spacer(),
+            Text("12:42:00", get_font(10), align="center"),
+        ])
+    """
+
+    def __init__(
+        self,
+        children,
+        *,
+        gap=0,
+        padding=0,
+        horizontal_align="left",
+    ):
+        self.children = children
+        self.gap = gap
+        self.padding = padding
+        self.horizontal_align = horizontal_align
+
+    def render(self, draw, x, y, width, height):
+        content_x = x + self.padding
+        content_y = y + self.padding
+
+        content_width = max(
+            0,
+            width - self.padding * 2,
+        )
+
+        content_height = max(
+            0,
+            height - self.padding * 2,
+        )
+
+        # Measure all non-spacer children first.
+        fixed_height = 0
+        spacer_weight = 0
+        child_sizes = []
+
+        for child in self.children:
+            if isinstance(child, Spacer):
+                spacer_weight += child.weight
+                child_sizes.append((child, 0))
+                continue
+
+            _, child_height = child.measure(
+                draw,
+                content_width,
+                content_height,
+            )
+
+            fixed_height += child_height
+            child_sizes.append((child, child_height))
+
+        gaps = self.gap * max(
+            0,
+            len(self.children) - 1,
+        )
+
+        remaining_height = max(
+            0,
+            content_height - fixed_height - gaps,
+        )
+
+        spacer_height = (
+            remaining_height / spacer_weight
+            if spacer_weight
+            else 0
+        )
+
+        cursor_y = content_y
+
+        for child, child_height in child_sizes:
+
+            if isinstance(child, Spacer):
+                cursor_y += int(
+                    spacer_height * child.weight
+                )
+                continue
+
+            if self.horizontal_align == "center":
+                child_x = (
+                    content_x
+                    + (content_width - child.measure(
+                        draw,
+                        content_width,
+                        content_height,
+                    )[0]) // 2
+                )
+
+            elif self.horizontal_align == "right":
+                child_width = child.measure(
+                    draw,
+                    content_width,
+                    content_height,
+                )[0]
+
+                child_x = (
+                    content_x
+                    + content_width
+                    - child_width
+                )
+
+            else:
+                child_x = content_x
+
+            child_width = content_width
+
+            child.render(
+                draw,
+                child_x,
+                cursor_y,
+                child_width,
+                child_height,
+            )
+
+            cursor_y += child_height + self.gap
+
+        return min(
+            height,
+            cursor_y - y + self.padding,
+        )
+
+
+def render_layout(layout):
+    """
+    Render a declarative layout onto a 1-bit e-ink canvas.
+    """
+    img = Image.new(
+        "1",
+        (WIDTH, HEIGHT),
+        1,
+    )
+
+    draw = ImageDraw.Draw(img)
+
+    # Bitmap needs access to the underlying image.
+    draw._layout_canvas = img
+
+    layout.render(
+        draw,
+        0,
+        0,
+        WIDTH,
+        HEIGHT,
+    )
+
+    return img
+
+
+# ============================================================================
+# Images
+# ============================================================================
 
 def logo_to_eink(path, target_size):
     img = Image.open(path).convert("L")
     img.thumbnail(target_size, Image.LANCZOS)
-    img_1bit = img.point(lambda p: 255 if p > 128 else 0).convert("1")
+
+    img_1bit = img.point(
+        lambda p: 255 if p > 128 else 0
+    ).convert("1")
+
     return img_1bit
 
 
 def get_daily_logo_path():
-    candidates = sorted(glob.glob(LOGO_GLOB_PATTERN))
+    candidates = sorted(
+        glob.glob(LOGO_GLOB_PATTERN)
+    )
+
     if not candidates:
         return None
+
     today_seed = datetime.now().date().toordinal()
+
     rng = random.Random(today_seed)
+
     return rng.choice(candidates)
 
 
 def list_logos():
-    return sorted(glob.glob(LOGO_GLOB_PATTERN))
+    return sorted(
+        glob.glob(LOGO_GLOB_PATTERN)
+    )
 
 
-# ------------------------------------------------------------- docker status
+# ============================================================================
+# Docker status
+# ============================================================================
 
 def get_container_statuses(client, watched):
     results = []
-    containers = {c.name: c for c in client.containers.list(all=True)}
-    names = watched if watched else list(containers.keys())
+
+    containers = {
+        c.name: c
+        for c in client.containers.list(all=True)
+    }
+
+    names = (
+        watched
+        if watched
+        else list(containers.keys())
+    )
 
     for name in names:
-        c = containers.get(name)
-        if c is None:
-            results.append((name, "missing", False))
+        container = containers.get(name)
+
+        if container is None:
+            results.append(
+                (name, "missing", False)
+            )
             continue
 
-        c.reload()
-        status = c.status
-        health = None
-        health_info = c.attrs.get("State", {}).get("Health")
-        if health_info:
-            health = health_info.get("Status") == "healthy"
+        container.reload()
 
-        results.append((name, status, health))
+        status = container.status
+        health = None
+
+        health_info = (
+            container.attrs
+            .get("State", {})
+            .get("Health")
+        )
+
+        if health_info:
+            health = (
+                health_info.get("Status")
+                == "healthy"
+            )
+
+        results.append(
+            (name, status, health)
+        )
 
     return results
 
@@ -148,422 +597,908 @@ def get_container_statuses(client, watched):
 def is_problem(status, healthy):
     if status != "running":
         return True
+
     if healthy is False:
         return True
+
     return False
 
 
-# -------------------------------------------------------------- text helpers
-
-def draw_centered_text(draw, y, text, font, fill=0):
-    bbox = draw.textbbox((0, 0), text, font=font)
-    text_width = bbox[2] - bbox[0]
-    x = (WIDTH - text_width) // 2
-    draw.text((x, y), text, font=font, fill=fill)
-    return x, y
-
-
-# ------------------------------------------------------------------ screens
-
-def render_all_clear_screen(logo_path_override=None):
-    img = Image.new("1", (WIDTH, HEIGHT), 1)
-    draw = ImageDraw.Draw(img)
-
-    logo_path = logo_path_override or get_daily_logo_path()
-
-    if logo_path:
-        logo = logo_to_eink(logo_path, target_size=(WIDTH - 10, HEIGHT - 16))
-        x = (WIDTH - logo.width) // 2
-        y = ((HEIGHT - 16) - logo.height) // 2
-        img.paste(logo, (x, y))
-    else:
-        draw_centered_text(draw, HEIGHT // 2 - 26, "X_X", get_font(30))
-        draw_centered_text(draw, HEIGHT // 2 - 8, "no logo*.jpg found", get_font(10))
-
-#   remove comments if you want a timestamp
-#    timestamp = datetime.now().strftime("%H:%M:%S")
-#    draw_centered_text(draw, HEIGHT - 12, f" {timestamp}", get_font(10))
-    return img
-
-
-def render_alert_screen(problems, snoozed_until=None):
-    img = Image.new("1", (WIDTH, HEIGHT), 1)
-    draw = ImageDraw.Draw(img)
-
-    banner_height = 40
-    padding = 6
-    y = banner_height + 4
-
-    if os.path.exists(BREACH_IMAGE_PATH):
-        banner = logo_to_eink(BREACH_IMAGE_PATH, target_size=(WIDTH - 10, banner_height))
-        x = (WIDTH - banner.width) // 2
-        by = (banner_height - banner.height) // 2
-        img.paste(banner, (x, by))
-    else:
-        draw.rectangle((0, 0, WIDTH - 1, HEIGHT - 1), outline=0, width=3)
-        draw_centered_text(draw, 8, "!! WARNING !!", get_font(20))
-
-    # add the alert icon on both sides of the banner line
-    icon_size = banner_height - 8
-    icon_y = (banner_height - icon_size) // 2
-
-    if os.path.exists(BREACH_ICON_PATH):
-        alert_icon = logo_to_eink(BREACH_ICON_PATH, target_size=(icon_size, icon_size))
-        img.paste(alert_icon, (padding, icon_y))                      # left side
-        rx = WIDTH - alert_icon.width - padding
-        img.paste(alert_icon, (rx, icon_y))                            # right side
-
-    small_font = get_font(12)
-    for name, status, healthy in problems[:4]:
-        reason = "down" if status != "running" else "unhealthy"
-        draw_centered_text(draw, y, f"{name[:18]}: {reason}", small_font)
-        y += 16
-
-    if snoozed_until:
-        remaining_min = max(0, int((snoozed_until - time.time()) / 60) + 1)
-        draw_centered_text(draw, HEIGHT - 26, f"snoozed ({remaining_min}m left)", get_font(10))
-
-    timestamp = datetime.now().strftime("%H:%M:%S")
-    draw_centered_text(draw, HEIGHT - 14, timestamp, get_font(10))
-    return img
-
-def render_container_list_screen(statuses, selected_idx=0, scroll_offset=0, restart_armed_name=None):
-    img = Image.new("1", (WIDTH, HEIGHT), 1)
-    draw = ImageDraw.Draw(img)
-    title_font = get_font(14)
-    row_font = get_font(11)
-
-    draw_centered_text(draw, 2, "Container Status", title_font)
-    draw.line((4, 20, WIDTH - 4, 20), fill=0, width=2)
-
-    visible = statuses[scroll_offset:scroll_offset + CONTAINER_LIST_VISIBLE_ROWS]
-
-    y = 26
-    for offset, (name, status, healthy) in enumerate(visible):
-        idx = scroll_offset + offset
-        problem = is_problem(status, healthy)
-        marker = "!!" if problem else "OK"
-        cursor = ">" if idx == selected_idx else " "
-        label = name[:20]
-        if restart_armed_name == name:
-            label += " (confirm?)"
-        draw.text((4, y), f"{cursor}{marker}  {label}", font=row_font, fill=0)
-        y += 14
-
-    # Scroll position indicator, if there's more than fits on screen.
-    if len(statuses) > CONTAINER_LIST_VISIBLE_ROWS:
-        draw.text((WIDTH - 40, 2), f"{selected_idx + 1}/{len(statuses)}", font=get_font(10), fill=0)
-
-    timestamp = datetime.now().strftime("%H:%M:%S")
-    draw_centered_text(draw, HEIGHT - 12, timestamp, get_font(10))
-    return img
-
+# ============================================================================
+# Stats
+# ============================================================================
 
 def read_nuc_stats():
     """
-    Reads basic system stats using only the standard library — no
-    extra pip dependency needed. CPU temp is best-effort since its
-    location varies by hardware; falls back to "N/A" if not found.
+    Read basic system stats using only the standard library.
     """
+
     stats = {}
 
+    # Uptime
     try:
         with open("/proc/uptime") as f:
-            uptime_seconds = float(f.read().split()[0])
-        days, rem = divmod(int(uptime_seconds), 86400)
-        hours, rem = divmod(rem, 3600)
+            uptime_seconds = float(
+                f.read().split()[0]
+            )
+
+        days, rem = divmod(
+            int(uptime_seconds),
+            86400,
+        )
+
+        hours, rem = divmod(
+            rem,
+            3600,
+        )
+
         minutes = rem // 60
-        stats["uptime"] = f"{days}d {hours}h {minutes}m"
+
+        stats["uptime"] = (
+            f"{days}d {hours}h {minutes}m"
+        )
+
     except Exception:
         stats["uptime"] = "N/A"
 
+    # Disk
     try:
         import shutil
-        total, used, free = shutil.disk_usage("/")
-        stats["disk"] = f"{used / total * 100:.0f}% used ({free // (2**30)}GB free)"
+
+        total, used, free = (
+            shutil.disk_usage("/")
+        )
+
+        stats["disk"] = (
+            f"{used / total * 100:.0f}% used "
+            f"({free // (2**30)}GB free)"
+        )
+
     except Exception:
         stats["disk"] = "N/A"
 
+    # Load
     try:
         load1, load5, load15 = os.getloadavg()
-        stats["load"] = f"{load1:.2f} / {load5:.2f} / {load15:.2f}"
+
+        stats["load"] = (
+            f"{load1:.2f} / "
+            f"{load5:.2f} / "
+            f"{load15:.2f}"
+        )
+
     except Exception:
         stats["load"] = "N/A"
 
+    # Memory
     try:
         with open("/proc/meminfo") as f:
             meminfo = {}
+
             for line in f:
                 parts = line.split(":")
+
                 if len(parts) == 2:
-                    meminfo[parts[0].strip()] = int(parts[1].strip().split()[0])
-        total_kb = meminfo.get("MemTotal", 0)
-        avail_kb = meminfo.get("MemAvailable", 0)
-        used_pct = (1 - avail_kb / total_kb) * 100 if total_kb else 0
-        stats["memory"] = f"{used_pct:.0f}% used"
+                    meminfo[
+                        parts[0].strip()
+                    ] = int(
+                        parts[1]
+                        .strip()
+                        .split()[0]
+                    )
+
+        total_kb = meminfo.get(
+            "MemTotal",
+            0,
+        )
+
+        avail_kb = meminfo.get(
+            "MemAvailable",
+            0,
+        )
+
+        used_pct = (
+            (1 - avail_kb / total_kb) * 100
+            if total_kb
+            else 0
+        )
+
+        stats["memory"] = (
+            f"{used_pct:.0f}% used"
+        )
+
     except Exception:
         stats["memory"] = "N/A"
 
+    # Temperature
     try:
-        with open("/sys/class/thermal/thermal_zone0/temp") as f:
-            temp_c = int(f.read().strip()) / 1000
-        stats["temp"] = f"{temp_c:.0f}C"
+        with open(
+            "/sys/class/thermal/thermal_zone0/temp"
+        ) as f:
+            temp_c = (
+                int(f.read().strip())
+                / 1000
+            )
+
+        stats["temp"] = (
+            f"{temp_c:.0f}C"
+        )
+
     except Exception:
         stats["temp"] = "N/A"
 
     return stats
 
 
-def render_stats_screen():
-    img = Image.new("1", (WIDTH, HEIGHT), 1)
-    draw = ImageDraw.Draw(img)
-    title_font = get_font(14)
-    row_font = get_font(12)
+# ============================================================================
+# UI components
+# ============================================================================
 
-    draw_centered_text(draw, 2, "NUC Stats", title_font)
-    draw.line((4, 20, WIDTH - 4, 20), fill=0, width=2)
+def timestamp_component():
+    return Text(
+        datetime.now().strftime("%H:%M:%S"),
+        get_font(10),
+        align="center",
+    )
 
+
+def stats_screen():
     stats = read_nuc_stats()
-    rows = [
-        f"Uptime: {stats['uptime']}",
-        f"Load (1/5/15m): {stats['load']}",
-        f"Memory: {stats['memory']}",
-        f"Disk: {stats['disk']}",
-        f"Temp: {stats['temp']}",
+
+    return Column(
+        [
+            Text(
+                "NUC Stats",
+                get_font(14),
+                align="center",
+            ),
+
+            Divider(),
+
+            Text(
+                f"Uptime: {stats['uptime']}",
+                get_font(12),
+            ),
+
+            Text(
+                f"Load (1/5/15m): {stats['load']}",
+                get_font(12),
+            ),
+
+            Text(
+                f"Memory: {stats['memory']}",
+                get_font(12),
+            ),
+
+            Text(
+                f"Disk: {stats['disk']}",
+                get_font(12),
+            ),
+
+            Text(
+                f"Temp: {stats['temp']}",
+                get_font(12),
+            ),
+
+            Spacer(),
+
+            timestamp_component(),
+        ],
+        gap=2,
+        padding=6,
+    )
+
+
+def container_list_screen(
+    statuses,
+    selected_idx=0,
+    restart_armed_name=None,
+):
+    children = [
+        Text(
+            "Container Status",
+            get_font(14),
+            align="center",
+        ),
+
+        Divider(),
     ]
 
-    y = 28
-    for row in rows:
-        draw.text((6, y), row, font=row_font, fill=0)
-        y += 16
+    visible = statuses[
+        :CONTAINER_LIST_VISIBLE_ROWS
+    ]
 
-    timestamp = datetime.now().strftime("%H:%M:%S")
-    draw_centered_text(draw, HEIGHT - 12, timestamp, get_font(10))
-    return img
+    for idx, (name, status, healthy) in enumerate(
+        visible
+    ):
+        problem = is_problem(
+            status,
+            healthy,
+        )
+
+        marker = (
+            "!!"
+            if problem
+            else "OK"
+        )
+
+        cursor = (
+            ">"
+            if idx == selected_idx
+            else " "
+        )
+
+        label = name[:20]
+
+        if restart_armed_name == name:
+            label += " (confirm?)"
+
+        children.append(
+            Text(
+                f"{cursor}{marker}  {label}",
+                get_font(11),
+            )
+        )
+
+    # Keep the timestamp at the bottom.
+    children.extend([
+        Spacer(),
+        timestamp_component(),
+    ])
+
+    # If the list is longer than the screen,
+    # put the position indicator into the header.
+    # For now we simply append it as a small row.
+    if len(statuses) > CONTAINER_LIST_VISIBLE_ROWS:
+        children.insert(
+            1,
+            Text(
+                f"{selected_idx + 1}/{len(statuses)}",
+                get_font(10),
+                align="right",
+            ),
+        )
+
+    return Column(
+        children,
+        gap=1,
+        padding=4,
+    )
 
 
-# ------------------------------------------------------------------- serial
+def alert_screen(
+    problems,
+    snoozed_until=None,
+):
+    children = []
+
+    # Banner
+    if os.path.exists(
+        BREACH_IMAGE_PATH
+    ):
+        banner = logo_to_eink(
+            BREACH_IMAGE_PATH,
+            target_size=(
+                WIDTH - 10,
+                40,
+            ),
+        )
+
+        children.append(
+            Bitmap(
+                banner,
+                align="center",
+            )
+        )
+
+    else:
+        children.append(
+            Text(
+                "!! WARNING !!",
+                get_font(20),
+                align="center",
+            )
+        )
+
+    # Problem list
+    for name, status, healthy in problems[:4]:
+        reason = (
+            "down"
+            if status != "running"
+            else "unhealthy"
+        )
+
+        children.append(
+            Text(
+                f"{name[:18]}: {reason}",
+                get_font(12),
+                align="center",
+            )
+        )
+
+    if snoozed_until:
+        remaining_min = max(
+            0,
+            int(
+                (snoozed_until - time.time())
+                / 60
+            ) + 1,
+        )
+
+        children.append(
+            Text(
+                f"snoozed ({remaining_min}m left)",
+                get_font(10),
+                align="center",
+            )
+        )
+
+    children.extend([
+        Spacer(),
+        timestamp_component(),
+    ])
+
+    return Column(
+        children,
+        gap=1,
+        padding=6,
+        horizontal_align="center",
+    )
+
+
+def all_clear_screen(
+    logo_path_override=None,
+):
+    logo_path = (
+        logo_path_override
+        or get_daily_logo_path()
+    )
+
+    if logo_path:
+        logo = logo_to_eink(
+            logo_path,
+            target_size=(
+                WIDTH - 10,
+                HEIGHT - 16,
+            ),
+        )
+
+        return Column(
+            [
+                Spacer(),
+                Bitmap(
+                    logo,
+                    align="center",
+                ),
+                Spacer(),
+            ],
+            padding=5,
+        )
+
+    return Column(
+        [
+            Spacer(),
+
+            Text(
+                "X_X",
+                get_font(30),
+                align="center",
+            ),
+
+            Text(
+                "no logo*.jpg found",
+                get_font(10),
+                align="center",
+            ),
+
+            Spacer(),
+        ],
+        padding=5,
+        horizontal_align="center",
+    )
+
+
+# ============================================================================
+# Serial protocol
+# ============================================================================
 
 def image_to_payload(img):
     packed = img.tobytes()
-    header = struct.pack(">2sHH", b"BD", img.width, img.height)
+
+    header = struct.pack(
+        ">2sHH",
+        b"BD",
+        img.width,
+        img.height,
+    )
+
     return header + packed
 
 
 def send_frame(ser, img):
     payload = image_to_payload(img)
+
     ser.write(payload)
     ser.flush()
 
 
 def read_pending_buttons(ser):
     """
-    Non-blocking read of any queued button-press bytes. Returns a
-    list of bytes in the order received (there may be several if
-    presses queued up while we were doing other work).
+    Non-blocking read of queued button presses.
     """
+
     presses = []
+
     while ser.in_waiting > 0:
         byte = ser.read(1)
+
         if byte in BUTTON_BYTES:
             presses.append(byte)
+
     return presses
 
 
-# --------------------------------------------------------------------- main
+# ============================================================================
+# Rendering
+# ============================================================================
+
+def render_current_view(
+    current_view,
+    statuses,
+    problems,
+    selected_container_idx,
+    restart_armed_name,
+    manual_logo_index,
+    snooze_until,
+):
+    if current_view == "containers":
+        layout = container_list_screen(
+            statuses,
+            selected_idx=selected_container_idx,
+            restart_armed_name=restart_armed_name,
+        )
+
+    elif current_view == "stats":
+        layout = stats_screen()
+
+    else:
+        now = time.time()
+
+        if problems and now >= snooze_until:
+            layout = alert_screen(
+                problems,
+                snoozed_until=None,
+            )
+
+        elif problems and now < snooze_until:
+            layout = alert_screen(
+                problems,
+                snoozed_until=snooze_until,
+            )
+
+        else:
+            logo_override = None
+
+            if manual_logo_index is not None:
+                logos = list_logos()
+
+                if logos:
+                    logo_override = logos[
+                        manual_logo_index
+                        % len(logos)
+                    ]
+
+            layout = all_clear_screen(
+                logo_path_override=logo_override,
+            )
+
+    return render_layout(layout)
+
+
+# ============================================================================
+# Main
+# ============================================================================
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--port", default="/dev/ttyACM0", help="Serial port for the Badger")
-    parser.add_argument("--baud", type=int, default=115200)
-    parser.add_argument("--interval", type=int, default=60, help="Seconds between Docker checks")
+
+    parser.add_argument(
+        "--port",
+        default="/dev/ttyACM0",
+        help="Serial port for the Badger",
+    )
+
+    parser.add_argument(
+        "--baud",
+        type=int,
+        default=115200,
+    )
+
+    parser.add_argument(
+        "--interval",
+        type=int,
+        default=60,
+        help="Seconds between Docker checks",
+    )
+
     parser.add_argument(
         "--alert-interval",
         type=int,
         default=600,
-        help="Seconds between display refreshes while a problem is active (default 600 = 10 min)",
+        help="Seconds between alert refreshes",
     )
+
     parser.add_argument(
         "--button-poll-interval",
         type=float,
         default=0.2,
-        help="Seconds between checks for button presses (default 0.2 — keeps the badge responsive)",
+        help="Seconds between button checks",
     )
+
     parser.add_argument(
         "--snooze-minutes",
         type=int,
         default=DEFAULT_SNOOZE_MINUTES,
-        help="How long the C button snoozes an active alert for (default 30)",
+        help="Alert snooze duration",
     )
+
     args = parser.parse_args()
 
     client = docker.from_env()
 
     try:
-        ser = serial.Serial(args.port, args.baud, timeout=0.1)
+        ser = serial.Serial(
+            args.port,
+            args.baud,
+            timeout=0.1,
+        )
+
     except serial.SerialException as e:
-        print(f"Could not open serial port {args.port}: {e}", file=sys.stderr)
+        print(
+            f"Could not open serial port "
+            f"{args.port}: {e}",
+            file=sys.stderr,
+        )
+
         sys.exit(1)
 
     time.sleep(2)
 
     print(
-        f"Monitoring containers every {args.interval}s. "
-        f"Alert refresh every {args.alert_interval}s. Port: {args.port}. Ctrl+C to stop."
+        f"Monitoring containers every "
+        f"{args.interval}s. "
+        f"Port: {args.port}. "
+        f"Ctrl+C to stop."
     )
 
-    # --- persistent state across loop iterations ---
+    # ------------------------------------------------------------------
+    # Persistent state
+    # ------------------------------------------------------------------
+
     view_index = 0
+
     last_check_time = 0.0
+
     force_refresh = False
-    needs_redraw = True  # draw something on first loop
+    needs_redraw = True
 
-    last_pushed_signature = None  # tracks (view, content-hash-ish) to avoid redundant pushes
+    manual_logo_index = None
 
-    manual_logo_index = None  # None = automatic daily pick
     selected_container_idx = 0
-    container_scroll_offset = 0
 
     snooze_until = 0.0
+
     restart_armed_name = None
     restart_armed_deadline = 0.0
 
     statuses = []
     problems = []
 
+    # ------------------------------------------------------------------
+    # Main loop
+    # ------------------------------------------------------------------
+
     while True:
         try:
             now = time.time()
-            current_view = VIEWS[view_index]
 
-            # ---- handle any queued button presses ----
+            current_view = VIEWS[
+                view_index
+            ]
+
+            # ----------------------------------------------------------
+            # Buttons
+            # ----------------------------------------------------------
+
             for press in read_pending_buttons(ser):
+
+                # ------------------------------------------------------
+                # A = force refresh
+                # ------------------------------------------------------
+
                 if press == b"A":
                     force_refresh = True
-                    print(f"[{datetime.now().isoformat(timespec='seconds')}] Button A: force refresh")
+
+                    print(
+                        f"[{datetime.now().isoformat(timespec='seconds')}] "
+                        "Button A: force refresh"
+                    )
+
+                # ------------------------------------------------------
+                # B = next view
+                # ------------------------------------------------------
 
                 elif press == b"B":
-                    view_index = (view_index + 1) % len(VIEWS)
-                    current_view = VIEWS[view_index]
-                    # Reset per-view ephemeral state on switch.
+                    view_index = (
+                        view_index + 1
+                    ) % len(VIEWS)
+
+                    current_view = VIEWS[
+                        view_index
+                    ]
+
                     selected_container_idx = 0
-                    container_scroll_offset = 0
+
                     needs_redraw = True
-                    print(f"[{datetime.now().isoformat(timespec='seconds')}] Button B: view -> {current_view}")
+
+                    print(
+                        f"[{datetime.now().isoformat(timespec='seconds')}] "
+                        f"Button B: view -> {current_view}"
+                    )
+
+                # ------------------------------------------------------
+                # C = context action
+                # ------------------------------------------------------
 
                 elif press == b"C":
+
                     if current_view == "auto":
+
                         if problems:
-                            snooze_until = now + args.snooze_minutes * 60
+                            snooze_until = (
+                                now
+                                + args.snooze_minutes * 60
+                            )
+
                             needs_redraw = True
-                            print(f"[{datetime.now().isoformat(timespec='seconds')}] Button C: snoozed for {args.snooze_minutes}m")
-                    elif current_view == "containers" and statuses:
-                        target_name = statuses[selected_container_idx][0]
-                        if restart_armed_name == target_name and now < restart_armed_deadline:
-                            # Confirmed — actually restart it.
-                            print(f"[{datetime.now().isoformat(timespec='seconds')}] Button C: restarting {target_name}")
+
+                            print(
+                                f"[{datetime.now().isoformat(timespec='seconds')}] "
+                                f"Button C: snoozed for "
+                                f"{args.snooze_minutes}m"
+                            )
+
+                    elif (
+                        current_view == "containers"
+                        and statuses
+                    ):
+                        target_name = statuses[
+                            selected_container_idx
+                        ][0]
+
+                        # Confirm restart
+                        if (
+                            restart_armed_name
+                            == target_name
+                            and now
+                            < restart_armed_deadline
+                        ):
+                            print(
+                                f"[{datetime.now().isoformat(timespec='seconds')}] "
+                                f"Button C: restarting "
+                                f"{target_name}"
+                            )
+
                             try:
-                                client.containers.get(target_name).restart()
+                                client.containers.get(
+                                    target_name
+                                ).restart()
+
                             except Exception as e:
-                                print(f"  restart failed: {e}", file=sys.stderr)
+                                print(
+                                    f"  restart failed: {e}",
+                                    file=sys.stderr,
+                                )
+
                             restart_armed_name = None
+
                             force_refresh = True
+
+                        # Arm restart
                         else:
-                            # Arm it — needs a second press within the window to confirm.
-                            restart_armed_name = target_name
-                            restart_armed_deadline = now + RESTART_CONFIRM_WINDOW_SECONDS
+                            restart_armed_name = (
+                                target_name
+                            )
+
+                            restart_armed_deadline = (
+                                now
+                                + RESTART_CONFIRM_WINDOW_SECONDS
+                            )
+
                             needs_redraw = True
-                            print(f"[{datetime.now().isoformat(timespec='seconds')}] Button C: armed restart on {target_name} (confirm within {RESTART_CONFIRM_WINDOW_SECONDS}s)")
-                    # "stats" view: no-op for C
+
+                            print(
+                                f"[{datetime.now().isoformat(timespec='seconds')}] "
+                                f"Button C: armed restart "
+                                f"on {target_name}"
+                            )
+
+                # ------------------------------------------------------
+                # U = up
+                # ------------------------------------------------------
 
                 elif press == b"U":
-                    if current_view == "containers" and statuses:
-                        selected_container_idx = max(0, selected_container_idx - 1)
-                        if selected_container_idx < container_scroll_offset:
-                            container_scroll_offset = selected_container_idx
+
+                    if (
+                        current_view == "containers"
+                        and statuses
+                    ):
+                        selected_container_idx = max(
+                            0,
+                            selected_container_idx - 1,
+                        )
+
                         needs_redraw = True
-                    elif current_view == "auto" and not problems:
+
+                    elif (
+                        current_view == "auto"
+                        and not problems
+                    ):
                         logos = list_logos()
+
                         if logos:
-                            idx = manual_logo_index if manual_logo_index is not None else 0
-                            manual_logo_index = (idx - 1) % len(logos)
+                            idx = (
+                                manual_logo_index
+                                if manual_logo_index is not None
+                                else 0
+                            )
+
+                            manual_logo_index = (
+                                idx - 1
+                            ) % len(logos)
+
                             needs_redraw = True
+
+                # ------------------------------------------------------
+                # D = down
+                # ------------------------------------------------------
 
                 elif press == b"D":
-                    if current_view == "containers" and statuses:
-                        selected_container_idx = min(len(statuses) - 1, selected_container_idx + 1)
-                        if selected_container_idx >= container_scroll_offset + CONTAINER_LIST_VISIBLE_ROWS:
-                            container_scroll_offset = selected_container_idx - CONTAINER_LIST_VISIBLE_ROWS + 1
+
+                    if (
+                        current_view == "containers"
+                        and statuses
+                    ):
+                        selected_container_idx = min(
+                            len(statuses) - 1,
+                            selected_container_idx + 1,
+                        )
+
                         needs_redraw = True
-                    elif current_view == "auto" and not problems:
+
+                    elif (
+                        current_view == "auto"
+                        and not problems
+                    ):
                         logos = list_logos()
+
                         if logos:
-                            idx = manual_logo_index if manual_logo_index is not None else 0
-                            manual_logo_index = (idx + 1) % len(logos)
+                            idx = (
+                                manual_logo_index
+                                if manual_logo_index is not None
+                                else 0
+                            )
+
+                            manual_logo_index = (
+                                idx + 1
+                            ) % len(logos)
+
                             needs_redraw = True
 
-            # Restart-arm window expiring on its own (no second press in time).
-            if restart_armed_name and now >= restart_armed_deadline:
-                print(f"[{datetime.now().isoformat(timespec='seconds')}] Restart confirm window expired for {restart_armed_name}")
+            # ----------------------------------------------------------
+            # Restart confirmation timeout
+            # ----------------------------------------------------------
+
+            if (
+                restart_armed_name
+                and now >= restart_armed_deadline
+            ):
+                print(
+                    f"[{datetime.now().isoformat(timespec='seconds')}] "
+                    f"Restart confirmation expired for "
+                    f"{restart_armed_name}"
+                )
+
                 restart_armed_name = None
                 needs_redraw = True
 
-            # Snooze expiring on its own.
-            if snooze_until and now >= snooze_until:
+            # ----------------------------------------------------------
+            # Snooze timeout
+            # ----------------------------------------------------------
+
+            if (
+                snooze_until
+                and now >= snooze_until
+            ):
                 snooze_until = 0.0
                 needs_redraw = True
 
-            # ---- decide whether to actually poll Docker this cycle ----
-            due_for_check = (now - last_check_time) >= args.interval
+            # ----------------------------------------------------------
+            # Docker polling
+            # ----------------------------------------------------------
+
+            due_for_check = (
+                now - last_check_time
+                >= args.interval
+            )
+
             if due_for_check or force_refresh:
+
                 last_check_time = now
-                statuses = get_container_statuses(client, WATCHED_CONTAINERS)
-                problems = [(n, s, h) for n, s, h in statuses if is_problem(s, h)]
+
+                statuses = (
+                    get_container_statuses(
+                        client,
+                        WATCHED_CONTAINERS,
+                    )
+                )
+
+                problems = [
+                    (name, status, healthy)
+                    for name, status, healthy
+                    in statuses
+                    if is_problem(
+                        status,
+                        healthy,
+                    )
+                ]
+
                 needs_redraw = True
                 force_refresh = False
 
-            # ---- render + push, only if something warrants it ----
+            # ----------------------------------------------------------
+            # Render
+            # ----------------------------------------------------------
+
             if needs_redraw:
-                if current_view == "containers":
-                    img = render_container_list_screen(
-                        statuses,
-                        selected_idx=selected_container_idx,
-                        scroll_offset=container_scroll_offset,
-                        restart_armed_name=restart_armed_name,
-                    )
-                    send_frame(ser, img)
-                    print(f"[{datetime.now().isoformat(timespec='seconds')}] Redrew: containers view")
 
-                elif current_view == "stats":
-                    img = render_stats_screen()
-                    send_frame(ser, img)
-                    print(f"[{datetime.now().isoformat(timespec='seconds')}] Redrew: stats view")
+                img = render_current_view(
+                    current_view=current_view,
+                    statuses=statuses,
+                    problems=problems,
+                    selected_container_idx=(
+                        selected_container_idx
+                    ),
+                    restart_armed_name=(
+                        restart_armed_name
+                    ),
+                    manual_logo_index=(
+                        manual_logo_index
+                    ),
+                    snooze_until=snooze_until,
+                )
 
-                else:  # "auto"
-                    if problems and now >= snooze_until:
-                        img = render_alert_screen(problems, snoozed_until=None)
-                        send_frame(ser, img)
-                        print(f"[{datetime.now().isoformat(timespec='seconds')}] Redrew: ALERT {problems}")
-                    elif problems and now < snooze_until:
-                        img = render_alert_screen(problems, snoozed_until=snooze_until)
-                        send_frame(ser, img)
-                        print(f"[{datetime.now().isoformat(timespec='seconds')}] Redrew: ALERT (snoozed)")
-                    else:
-                        logo_override = None
-                        if manual_logo_index is not None:
-                            logos = list_logos()
-                            if logos:
-                                logo_override = logos[manual_logo_index % len(logos)]
-                        img = render_all_clear_screen(logo_path_override=logo_override)
-                        send_frame(ser, img)
-                        print(f"[{datetime.now().isoformat(timespec='seconds')}] Redrew: all-clear")
+                send_frame(
+                    ser,
+                    img,
+                )
+
+                print(
+                    f"[{datetime.now().isoformat(timespec='seconds')}] "
+                    f"Redrew: {current_view}"
+                )
 
                 needs_redraw = False
 
         except Exception as e:
-            print(f"Error during check: {e}", file=sys.stderr)
+            print(
+                f"Error during check: {e}",
+                file=sys.stderr,
+            )
 
-        time.sleep(args.button_poll_interval)
+        time.sleep(
+            args.button_poll_interval
+        )
 
 
 if __name__ == "__main__":
