@@ -1,11 +1,17 @@
 # %%
 import matplotlib.pyplot as plt
-import docker_monitor
+from docker_monitor.layout import render_layout
+from docker_monitor.screens import (
+    all_clear_screen,
+    alert_screen,
+    container_list_screen,
+    stats_screen,
+)
 
 
 def preview(layout, *, scale=4):
     """Render a layout and display it at a useful preview size."""
-    img = docker_monitor.render_layout(layout)
+    img = render_layout(layout)
 
     width, height = img.size
 
@@ -32,12 +38,12 @@ fake_statuses = [
 # %%
 # Preview the "everything is fine" screen
 preview(
-    docker_monitor.all_clear_screen()
+    all_clear_screen()
 )
 
 # %%
 preview(
-    docker_monitor.container_list_screen(
+    container_list_screen(
         fake_statuses,
         selected_idx=3,
         restart_armed_name="homeassistant",
@@ -48,7 +54,7 @@ preview(
 # %%
 # Preview the stats screen
 preview(
-    docker_monitor.stats_screen()
+    stats_screen()
 )
 
 
@@ -61,7 +67,7 @@ fake_problems = [
 ]
 
 preview(
-    docker_monitor.alert_screen(
+    alert_screen(
         fake_problems,
         snoozed_until=time.time() + 17 * 60,
     )

@@ -11,8 +11,8 @@ Requires=docker.service
 [Service]
 Type=simple
 User=${USER}
-WorkingDirectory=/home/${USER}/docker-hud
-ExecStart=/home/${USER}/docker-hud/docker-hud-env/bin/python3 /home/${USER}/docker-hud/docker_monitor.py --port /dev/ttyACM1 --interval 60
+WorkingDirectory=/home/${USER}/docker_hud
+ExecStart=/home/${USER}/docker_hud/docker-hud-env/bin/python3 -m docker_monitor --port /dev/ttyACM1 --interval 60
 Restart=on-failure
 RestartSec=10
 

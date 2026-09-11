@@ -15,7 +15,7 @@ container.
 ```
 NUC (Docker host)                    Badger 2040 (CircuitPython)
 ------------------                   ---------------------------
-docker_monitor.py                    code.py
+docker_hud/docker_monitor/           code.py
   - polls Docker API      --USB-->     - reads framed image data,
   - renders bitmap                       draws it via displayio
   - sends over serial      <--USB--     - polls all 5 buttons,
@@ -28,6 +28,24 @@ docker_monitor.py                    code.py
 Communication is bidirectional over one USB serial connection (the
 Badger's dedicated "data" port, separate from its REPL console).
 
+```
+docker_hud/
+├── docker_monitor/        # Python package (NUC side)
+│   ├── __main__.py         # python -m docker_monitor
+│   ├── app.py               # argparse + main loop
+│   ├── config.py             # constants, incl. WATCHED_CONTAINERS
+│   ├── layout.py              # declarative layout primitives
+│   ├── screens.py              # screen composition
+│   ├── docker_status.py         # Docker API queries
+│   ├── stats.py                  # host (NUC) stats
+│   ├── images.py                  # logo discovery / e-ink conversion
+│   ├── serial_protocol.py          # framing + button reads
+│   └── fonts.py                     # font loading
+├── assets/                # logo*.jpg, breach.jpg, mgsAlert.jpg (yours, gitignored)
+├── preview_scratchpad.py   # local screen preview, no Docker/serial needed
+└── requirements.txt
+```
+
 ## Requirements
 
 - NUC (or any always-on Linux box) running Docker
@@ -39,9 +57,9 @@ Badger's dedicated "data" port, separate from its REPL console).
 
 ```bash
 sudo apt install python3-pip
-python3 -m venv ~/docker-hud-env
-source ~/docker-hud-env/bin/activate
-pip install docker pillow pyserial
+python3 -m venv ~/docker_hud/docker-hud-env
+source ~/docker_hud/docker-hud-env/bin/activate
+pip install -r requirements.txt
 ```
 
 Add your user to the `dialout` group (needed for serial access), then
@@ -55,8 +73,8 @@ Set the correct timezone, if timestamps look off:
 sudo timedatectl set-timezone Europe/Berlin
 ```
 
-Edit `WATCHED_CONTAINERS` in `docker_monitor.py` to match your actual
-container names (`docker ps --format '{{.Names}}'`).
+Edit `WATCHED_CONTAINERS` in `docker_monitor/config.py` to match your
+actual container names (`docker ps --format '{{.Names}}'`).
 
 Find the Badger's **data** serial port (there are two — console +
 data, see Badger setup below):
@@ -64,9 +82,10 @@ data, see Badger setup below):
 ls /dev/ttyACM*
 ```
 
-Run it:
+Run it (from inside `docker_hud/`, so the `docker_monitor` package and
+`assets/` folder are found):
 ```bash
-python3 docker_monitor.py --port /dev/ttyACM1 --interval 60
+python3 -m docker_monitor --port /dev/ttyACM1 --interval 60
 ```
 
 ## Badger Setup (CircuitPython)
@@ -89,7 +108,8 @@ python3 docker_monitor.py --port /dev/ttyACM1 --interval 60
 
 It's a "dumb" client with two jobs, running in one loop:
 
-- **Receives frames**: reads the image data `docker_monitor.py` sends
+- **Receives frames**: reads the image data the `docker_monitor`
+  package sends
   (a small header with width/height, then packed black/white pixel
   data) and draws it via `displayio`. It has no idea what a container
   or an alert is — it just draws whatever bitmap arrives.
@@ -120,27 +140,31 @@ confirm within 10s) — a stray single press never restarts anything.
 
 ## Logos & Breach Banner
 
-Drop any number of `logo.jpg`, `logo1.jpg`, `logo2.jpg`, ... next to
-`docker_monitor.py` on the NUC. One is picked at random each day
-(stable all day, changes daily) and shown as the "all clear" screen.
-No logos found -> falls back to an `X_X` text screen.
+Drop any number of `logo.jpg`, `logo1.jpg`, `logo2.jpg`, ... into
+`assets/` on the NUC. One is picked at random each day (stable all
+day, changes daily) and shown as the "all clear" screen. No logos
+found -> falls back to an `X_X` text screen.
 
-Drop a `breach.jpg` next to it too — shown as the banner at the top of
-the alert screen. Missing -> falls back to a plain "!! WARNING !!"
-text banner.
+Drop a `breach.jpg` into `assets/` too — shown as the banner at the
+top of the alert screen. Missing -> falls back to a plain
+"!! WARNING !!" text banner.
 
-Preview any screen (including with fake data) using the `preview.py`
-scratchpad — run in a local venv with just `pillow` installed, no
+Preview any screen (including with fake data) using the
+`preview_scratchpad.py` scratchpad — run it from `docker_hud/` in a
+local venv with just `pillow` and `matplotlib` installed, no
 Docker/serial needed:
 ```python
-logos = docker_monitor.list_logos()
-img = docker_monitor.render_all_clear_screen(logo_path_override=logos[0])
+from docker_monitor.images import list_logos
+from docker_monitor.screens import all_clear_screen
+
+logos = list_logos()
+layout = all_clear_screen(logo_path_override=logos[0])
 ```
 
 ## Run on boot (systemd)
 
-Edit `docker-monitor.service`, fixing `User=` and the venv/script
-paths, then:
+Edit `docker-monitor.service`, fixing `User=` and the venv/project
+paths (defaults assume `~/docker_hud`), then:
 ```bash
 sudo cp docker-monitor.service /etc/systemd/system/
 sudo systemctl daemon-reload
