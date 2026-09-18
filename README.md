@@ -3,8 +3,8 @@
 E-ink display on a NUC-connected Badger 2040 showing a daily-rotating
 logo when all Docker containers are healthy, a breach-style alert
 screen when something's down, and 5 physical buttons for switching
-views, refreshing, scrolling, snoozing alerts, and restarting a
-container.
+views, refreshing, scrolling, checking the breach count, and restarting
+a container.
 
 <p align="center">
   <img src="docker-hud.jpg" width="300" height="300">
@@ -32,15 +32,18 @@ Badger's dedicated "data" port, separate from its REPL console).
 docker_hud/
 ├── docker_monitor/        # Python package (NUC side)
 │   ├── __main__.py         # python -m docker_monitor
-│   ├── app.py               # argparse + main loop
-│   ├── config.py             # constants, incl. WATCHED_CONTAINERS
-│   ├── layout.py              # declarative layout primitives
-│   ├── screens.py              # screen composition
-│   ├── docker_status.py         # Docker API queries
-│   ├── stats.py                  # host (NUC) stats
-│   ├── images.py                  # logo discovery / e-ink conversion
-│   ├── serial_protocol.py          # framing + button reads
-│   └── fonts.py                     # font loading
+│   ├── app.py               # argparse + setup + tick loop
+│   ├── runtime.py            # MonitorState, the loop's mutable state
+│   ├── buttons.py             # one handler per button + dispatch table
+│   ├── transitions.py          # day rollover, restart timeout, polling
+│   ├── config.py                # constants, incl. WATCHED_CONTAINERS
+│   ├── layout.py                 # declarative layout primitives
+│   ├── screens.py                 # screen composition
+│   ├── docker_status.py            # Docker API queries
+│   ├── stats.py                     # host (NUC) stats
+│   ├── images.py                     # logo discovery / e-ink conversion
+│   ├── serial_protocol.py             # framing + button reads
+│   └── fonts.py                        # font loading
 ├── assets/                # logo*.jpg, breach.jpg, mgsAlert.jpg (yours, gitignored)
 ├── preview_scratchpad.py   # local screen preview, no Docker/serial needed
 └── requirements.txt
@@ -132,11 +135,17 @@ Cycle views with **B**: `auto` -> `containers` -> `stats` -> `auto` ...
 |---|---|---|---|
 | **A** | Force refresh | Force refresh | Force refresh |
 | **B** | -> `containers` | -> `stats` | -> `auto` |
-| **C** | Snooze active alert (`--snooze-minutes`, default 30) | Arm restart on selected container; press again within 10s to confirm | no-op |
+| **C** | Toggle breach counter (only while healthy) | Arm restart on selected container; press again within 10s to confirm | no-op |
 | **UP/DOWN** | Cycle logos manually (only while healthy) | Move selection cursor | no-op |
 
 Restarting a container always requires two C presses (arm, then
 confirm within 10s) — a stray single press never restarts anything.
+
+The breach counter tracks how many times the watched containers have
+gone from all-healthy to at least one down since the service started.
+Three containers failing at once counts as one breach; one container
+flapping three times counts as three. It resets when the service
+restarts.
 
 ## Logos & Breach Banner
 

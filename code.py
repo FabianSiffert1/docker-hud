@@ -14,7 +14,7 @@ Frame format (must match docker_monitor.py's image_to_payload):
 Button->NUC format: a single byte per press (debounced), one of:
     b"A" - button A  (force refresh)
     b"B" - button B  (switch view)
-    b"C" - button C  (context action: snooze / select / confirm)
+    b"C" - button C  (context action: breach count / select / confirm)
     b"U" - UP        (scroll up / previous logo)
     b"D" - DOWN      (scroll down / next logo)
 
@@ -60,12 +60,18 @@ BUTTON_PINS = {
 
 DEBOUNCE_SECONDS = 0.25
 
-_buttons = {}
-for _label, _pin in BUTTON_PINS.items():
-    _dio = digitalio.DigitalInOut(_pin)
-    _dio.direction = digitalio.Direction.INPUT
-    _dio.pull = digitalio.Pull.DOWN
-    _buttons[_label] = {"dio": _dio, "last_state": False, "last_time": 0.0}
+
+def init_buttons():
+    buttons = {}
+    for label, pin in BUTTON_PINS.items():
+        dio = digitalio.DigitalInOut(pin)
+        dio.direction = digitalio.Direction.INPUT
+        dio.pull = digitalio.Pull.DOWN
+        buttons[label] = {"dio": dio, "last_state": False, "last_time": 0.0}
+    return buttons
+
+
+_buttons = init_buttons()
 
 
 def check_buttons_and_send():
@@ -107,12 +113,7 @@ def read_frame():
     return width, height, data
 
 
-def draw_frame(width, height, data):
-    bitmap = displayio.Bitmap(width, height, 2)
-    palette = displayio.Palette(2)
-    palette[0] = 0xFFFFFF  # 0 = white
-    palette[1] = 0x000000  # 1 = black
-
+def unpack_into_bitmap(bitmap, width, height, data):
     row_bytes = (width + 7) // 8
     for y in range(height):
         row_start = y * row_bytes
@@ -120,6 +121,15 @@ def draw_frame(width, height, data):
             byte = data[row_start + (x // 8)]
             bit = (byte >> (7 - (x % 8))) & 1
             bitmap[x, y] = 0 if bit else 1
+
+
+def draw_frame(width, height, data):
+    bitmap = displayio.Bitmap(width, height, 2)
+    palette = displayio.Palette(2)
+    palette[0] = 0xFFFFFF  # 0 = white
+    palette[1] = 0x000000  # 1 = black
+
+    unpack_into_bitmap(bitmap, width, height, data)
 
     tile_grid = displayio.TileGrid(bitmap, pixel_shader=palette)
     group = displayio.Group()
