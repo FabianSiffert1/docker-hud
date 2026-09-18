@@ -107,6 +107,33 @@ python3 -m docker_monitor --port /dev/ttyACM1 --interval 60
 3. `board.DISPLAY` handles the e-ink panel natively — no extra driver
    library needed.
 
+### Updating `code.py` later
+
+If `boot.py` contains `storage.remount("/", readonly=False)`, the board
+owns the filesystem and the host cannot write to it — saving `code.py`
+fails with `OSError: [Errno 30] Read-only file system`. Hand write
+access back from the Thonny REPL:
+
+```python
+import storage
+storage.remount("/", readonly=True)
+```
+
+Getting a REPL prompt in Thonny:
+
+- Set the interpreter in the bottom-right box (Thonny's own docs say
+  MicroPython (Raspberry Pi Pico); CircuitPython (generic) also works).
+- Pick the right port. With `usb_cdc.enable(console=True, data=True)`
+  there are two — the lower-numbered one is usually the console, the
+  other carries binary frames. `ls /dev/cu.usbmodem*` lists them, and
+  the numbers change between replugs, so a port that worked last time
+  may not exist now.
+- Press stop to interrupt the running program, or enable
+  Tools > Options > Interpreter > "Interrupt working program on
+  connect".
+- Reopen the file from the Badger after reconnecting — Thonny keeps a
+  stale reference to the old handle and saves will fail.
+
 ### What `code.py` actually does
 
 It's a "dumb" client with two jobs, running in one loop:
