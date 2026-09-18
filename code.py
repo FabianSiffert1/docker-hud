@@ -161,7 +161,6 @@ def main():
             if data_serial.in_waiting >= HEADER_LEN:
                 width, height, data = read_frame()
                 draw_frame(width, height, data)
-                time.sleep(1)  # respect e-ink refresh limits
             else:
                 time.sleep(0.05)  # short poll interval for responsive buttons
 
