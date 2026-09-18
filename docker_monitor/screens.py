@@ -7,6 +7,7 @@ from datetime import datetime
 from .config import (
     WIDTH,
     HEIGHT,
+    View,
     BREACH_IMAGE_PATH,
     CONTAINER_LIST_VISIBLE_ROWS,
 )
@@ -324,7 +325,7 @@ def render_current_view(
     breach_count=0,
     show_breach_count=False,
 ):
-    if current_view == "containers":
+    if current_view == View.CONTAINERS:
         layout = container_list_screen(
             statuses,
             selected_idx=selected_container_idx,
@@ -332,7 +333,7 @@ def render_current_view(
             restart_armed_name=restart_armed_name,
         )
 
-    elif current_view == "stats":
+    elif current_view == View.STATS:
         layout = stats_screen()
 
     else:

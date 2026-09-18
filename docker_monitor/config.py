@@ -22,9 +22,30 @@ WATCHED_CONTAINERS = [
     "immich_machine_learning",
 ]
 
-VIEWS = ["auto", "containers", "stats"]
+
+class View:
+    AUTO = "auto"
+    CONTAINERS = "containers"
+    STATS = "stats"
+
+
+class Button:
+    A = b"A"
+    B = b"B"
+    C = b"C"
+    UP = b"U"
+    DOWN = b"D"
+
+
+VIEWS = [View.AUTO, View.CONTAINERS, View.STATS]
 
 CONTAINER_LIST_VISIBLE_ROWS = 6
 RESTART_CONFIRM_WINDOW_SECONDS = 10
 
-BUTTON_BYTES = {b"A", b"B", b"C", b"U", b"D"}
+BUTTON_BYTES = {
+    Button.A,
+    Button.B,
+    Button.C,
+    Button.UP,
+    Button.DOWN,
+}

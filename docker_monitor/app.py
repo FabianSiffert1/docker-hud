@@ -10,6 +10,8 @@ import serial
 
 from .config import (
     VIEWS,
+    Button,
+    View,
     CONTAINER_LIST_VISIBLE_ROWS,
     RESTART_CONFIRM_WINDOW_SECONDS,
     WATCHED_CONTAINERS,
@@ -132,7 +134,7 @@ def main():
                 # A = force Docker check + redraw
                 # ------------------------------------------------------
 
-                if press == b"A":
+                if press == Button.A:
                     force_refresh = True
 
                     print(
@@ -144,7 +146,7 @@ def main():
                 # B = next view
                 # ------------------------------------------------------
 
-                elif press == b"B":
+                elif press == Button.B:
                     view_index = (
                         view_index + 1
                     ) % len(VIEWS)
@@ -168,9 +170,9 @@ def main():
                 # C = context action
                 # ------------------------------------------------------
 
-                elif press == b"C":
+                elif press == Button.C:
 
-                    if current_view == "auto":
+                    if current_view == View.AUTO:
 
                         if not problems:
                             show_breach_count = (
@@ -186,7 +188,7 @@ def main():
                             )
 
                     elif (
-                        current_view == "containers"
+                        current_view == View.CONTAINERS
                         and statuses
                     ):
                         target_name = statuses[
@@ -244,10 +246,10 @@ def main():
                 # U = up
                 # ------------------------------------------------------
 
-                elif press == b"U":
+                elif press == Button.UP:
 
                     if (
-                        current_view == "containers"
+                        current_view == View.CONTAINERS
                         and statuses
                     ):
                         old_idx = (
@@ -275,7 +277,7 @@ def main():
                             needs_redraw = True
 
                     elif (
-                        current_view == "auto"
+                        current_view == View.AUTO
                         and not problems
                     ):
                         logos = list_logos()
@@ -297,10 +299,10 @@ def main():
                 # D = down
                 # ------------------------------------------------------
 
-                elif press == b"D":
+                elif press == Button.DOWN:
 
                     if (
-                        current_view == "containers"
+                        current_view == View.CONTAINERS
                         and statuses
                     ):
                         old_idx = (
@@ -340,7 +342,7 @@ def main():
                             needs_redraw = True
 
                     elif (
-                        current_view == "auto"
+                        current_view == View.AUTO
                         and not problems
                     ):
                         logos = list_logos()
