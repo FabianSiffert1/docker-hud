@@ -23,7 +23,7 @@ class Component:
     def measure(self, draw, width, height):
         return width, 0
 
-    def render(self, draw, x, y, width, height):
+    def render(self, canvas, draw, x, y, width, height):
         return 0
 
 
@@ -50,7 +50,7 @@ class Text(Component):
 
         return width, bbox[3] - bbox[1]
 
-    def render(self, draw, x, y, width, height):
+    def render(self, canvas, draw, x, y, width, height):
         bbox = draw.textbbox(
             (0, 0),
             self.text,
@@ -87,7 +87,7 @@ class Divider(Component):
     def measure(self, draw, width, height):
         return width, self.thickness + self.margin * 2
 
-    def render(self, draw, x, y, width, height):
+    def render(self, canvas, draw, x, y, width, height):
         line_y = y + self.margin
 
         draw.line(
@@ -120,7 +120,7 @@ class Bitmap(Component):
     def measure(self, draw, width, height):
         return self.image.width, self.image.height
 
-    def render(self, draw, x, y, width, height):
+    def render(self, canvas, draw, x, y, width, height):
         if self.align == "center":
             image_x = x + (width - self.image.width) // 2
 
@@ -129,17 +129,6 @@ class Bitmap(Component):
 
         else:
             image_x = x
-
-        canvas = getattr(
-            draw,
-            "_layout_canvas",
-            None,
-        )
-
-        if canvas is None:
-            raise RuntimeError(
-                "Bitmap requires a layout canvas"
-            )
 
         canvas.paste(
             self.image,
@@ -203,7 +192,7 @@ class Row(Component):
             max_height + self.padding * 2,
         )
 
-    def render(self, draw, x, y, width, height):
+    def render(self, canvas, draw, x, y, width, height):
         content_x = x + self.padding
         content_y = y + self.padding
         content_width = width - self.padding * 2
@@ -286,6 +275,7 @@ class Row(Component):
                 child_y = content_y
 
             child.render(
+                canvas,
                 draw,
                 cursor_x,
                 child_y,
@@ -320,7 +310,7 @@ class Column(Component):
         self.padding = padding
         self.horizontal_align = horizontal_align
 
-    def render(self, draw, x, y, width, height):
+    def render(self, canvas, draw, x, y, width, height):
         content_x = x + self.padding
         content_y = y + self.padding
 
@@ -381,6 +371,7 @@ class Column(Component):
                 continue
 
             child.render(
+                canvas,
                 draw,
                 content_x,
                 cursor_y,
@@ -405,9 +396,8 @@ def render_layout(layout):
 
     draw = ImageDraw.Draw(img)
 
-    draw._layout_canvas = img
-
     layout.render(
+        img,
         draw,
         0,
         0,

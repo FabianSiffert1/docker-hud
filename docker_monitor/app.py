@@ -8,18 +8,15 @@ from datetime import datetime
 import docker
 import serial
 
-from .config import (
-    VIEWS,
-    Button,
-    View,
-    CONTAINER_LIST_VISIBLE_ROWS,
-    RESTART_CONFIRM_WINDOW_SECONDS,
-    WATCHED_CONTAINERS,
-)
-from .docker_status import get_container_statuses, is_problem
-from .images import list_logos
+from .buttons import handle_press
+from .runtime import AppContext, MonitorState
 from .screens import render_current_view
 from .serial_protocol import read_pending_buttons, send_frame
+from .transitions import (
+    apply_day_rollover,
+    apply_restart_timeout,
+    poll_docker,
+)
 
 
 def build_arg_parser():
@@ -54,6 +51,59 @@ def build_arg_parser():
     return parser
 
 
+def render_and_send(state, ser):
+    img = render_current_view(
+        current_view=state.current_view,
+        statuses=state.statuses,
+        problems=state.problems,
+        selected_container_idx=(
+            state.selected_container_idx
+        ),
+        container_scroll_offset=(
+            state.container_scroll_offset
+        ),
+        restart_armed_name=(
+            state.restart_armed_name
+        ),
+        manual_logo_index=(
+            state.manual_logo_index
+        ),
+        breach_count=state.breach_count,
+        show_breach_count=state.show_breach_count,
+    )
+
+    send_frame(
+        ser,
+        img,
+    )
+
+    print(
+        f"[{datetime.now().isoformat(timespec='seconds')}] "
+        f"Redrew: {state.current_view}"
+    )
+
+    state.needs_redraw = False
+
+
+def tick(state, ctx, ser, interval):
+    now = time.time()
+
+    for press in read_pending_buttons(ser):
+        handle_press(press, state, ctx, now)
+
+    apply_day_rollover(
+        state,
+        datetime.now().date(),
+    )
+
+    apply_restart_timeout(state, now)
+
+    poll_docker(state, ctx, now, interval)
+
+    if state.needs_redraw:
+        render_and_send(state, ser)
+
+
 def main():
     parser = build_arg_parser()
     args = parser.parse_args()
@@ -85,419 +135,17 @@ def main():
         f"Ctrl+C to stop."
     )
 
-    # ------------------------------------------------------------------
-    # Persistent state
-    # ------------------------------------------------------------------
-
-    view_index = 0
-
-    last_check_time = 0.0
-
-    force_refresh = False
-    needs_redraw = True
-
-    manual_logo_index = None
-
-    current_day = datetime.now().date()
-
-    selected_container_idx = 0
-    container_scroll_offset = 0
-
-    breach_count = 0
-    show_breach_count = False
-
-    restart_armed_name = None
-    restart_armed_deadline = 0.0
-
-    statuses = []
-    problems = []
-
-    # ------------------------------------------------------------------
-    # Main loop
-    # ------------------------------------------------------------------
+    state = MonitorState()
+    ctx = AppContext(client)
 
     while True:
         try:
-            now = time.time()
-
-            current_view = VIEWS[
-                view_index
-            ]
-
-            # ----------------------------------------------------------
-            # Buttons
-            # ----------------------------------------------------------
-
-            for press in read_pending_buttons(ser):
-
-                # ------------------------------------------------------
-                # A = force Docker check + redraw
-                # ------------------------------------------------------
-
-                if press == Button.A:
-                    force_refresh = True
-
-                    print(
-                        f"[{datetime.now().isoformat(timespec='seconds')}] "
-                        "Button A: force refresh"
-                    )
-
-                # ------------------------------------------------------
-                # B = next view
-                # ------------------------------------------------------
-
-                elif press == Button.B:
-                    view_index = (
-                        view_index + 1
-                    ) % len(VIEWS)
-
-                    current_view = VIEWS[
-                        view_index
-                    ]
-
-                    selected_container_idx = 0
-                    container_scroll_offset = 0
-                    manual_logo_index = None
-
-                    needs_redraw = True
-
-                    print(
-                        f"[{datetime.now().isoformat(timespec='seconds')}] "
-                        f"Button B: view -> {current_view}"
-                    )
-
-                # ------------------------------------------------------
-                # C = context action
-                # ------------------------------------------------------
-
-                elif press == Button.C:
-
-                    if current_view == View.AUTO:
-
-                        if not problems:
-                            show_breach_count = (
-                                not show_breach_count
-                            )
-
-                            needs_redraw = True
-
-                            print(
-                                f"[{datetime.now().isoformat(timespec='seconds')}] "
-                                f"Button C: breach count "
-                                f"{'shown' if show_breach_count else 'hidden'}"
-                            )
-
-                    elif (
-                        current_view == View.CONTAINERS
-                        and statuses
-                    ):
-                        target_name = statuses[
-                            selected_container_idx
-                        ][0]
-
-                        # Confirm restart
-                        if (
-                            restart_armed_name
-                            == target_name
-                            and now
-                            < restart_armed_deadline
-                        ):
-                            print(
-                                f"[{datetime.now().isoformat(timespec='seconds')}] "
-                                f"Button C: restarting "
-                                f"{target_name}"
-                            )
-
-                            try:
-                                client.containers.get(
-                                    target_name
-                                ).restart()
-
-                            except Exception as e:
-                                print(
-                                    f"  restart failed: {e}",
-                                    file=sys.stderr,
-                                )
-
-                            restart_armed_name = None
-
-                            force_refresh = True
-
-                        # Arm restart
-                        else:
-                            restart_armed_name = (
-                                target_name
-                            )
-
-                            restart_armed_deadline = (
-                                now
-                                + RESTART_CONFIRM_WINDOW_SECONDS
-                            )
-
-                            needs_redraw = True
-
-                            print(
-                                f"[{datetime.now().isoformat(timespec='seconds')}] "
-                                f"Button C: armed restart "
-                                f"on {target_name}"
-                            )
-
-                # ------------------------------------------------------
-                # U = up
-                # ------------------------------------------------------
-
-                elif press == Button.UP:
-
-                    if (
-                        current_view == View.CONTAINERS
-                        and statuses
-                    ):
-                        old_idx = (
-                            selected_container_idx
-                        )
-
-                        selected_container_idx = max(
-                            0,
-                            selected_container_idx - 1,
-                        )
-
-                        if (
-                            selected_container_idx
-                            != old_idx
-                        ):
-                            # Keep selected item visible.
-                            if (
-                                selected_container_idx
-                                < container_scroll_offset
-                            ):
-                                container_scroll_offset = (
-                                    selected_container_idx
-                                )
-
-                            needs_redraw = True
-
-                    elif (
-                        current_view == View.AUTO
-                        and not problems
-                    ):
-                        logos = list_logos()
-
-                        if logos:
-                            idx = (
-                                manual_logo_index
-                                if manual_logo_index is not None
-                                else 0
-                            )
-
-                            manual_logo_index = (
-                                idx - 1
-                            ) % len(logos)
-
-                            needs_redraw = True
-
-                # ------------------------------------------------------
-                # D = down
-                # ------------------------------------------------------
-
-                elif press == Button.DOWN:
-
-                    if (
-                        current_view == View.CONTAINERS
-                        and statuses
-                    ):
-                        old_idx = (
-                            selected_container_idx
-                        )
-
-                        selected_container_idx = min(
-                            len(statuses) - 1,
-                            selected_container_idx + 1,
-                        )
-
-                        if (
-                            selected_container_idx
-                            != old_idx
-                        ):
-                            # Keep selected item visible.
-                            max_scroll = max(
-                                0,
-                                len(statuses)
-                                - CONTAINER_LIST_VISIBLE_ROWS,
-                            )
-
-                            if (
-                                selected_container_idx
-                                >= (
-                                    container_scroll_offset
-                                    + CONTAINER_LIST_VISIBLE_ROWS
-                                )
-                            ):
-                                container_scroll_offset = min(
-                                    max_scroll,
-                                    selected_container_idx
-                                    - CONTAINER_LIST_VISIBLE_ROWS
-                                    + 1,
-                                )
-
-                            needs_redraw = True
-
-                    elif (
-                        current_view == View.AUTO
-                        and not problems
-                    ):
-                        logos = list_logos()
-
-                        if logos:
-                            idx = (
-                                manual_logo_index
-                                if manual_logo_index is not None
-                                else 0
-                            )
-
-                            manual_logo_index = (
-                                idx + 1
-                            ) % len(logos)
-
-                            needs_redraw = True
-
-            # ----------------------------------------------------------
-            # Date rollover
-            # ----------------------------------------------------------
-
-            today = datetime.now().date()
-
-            if today != current_day:
-                current_day = today
-
-                if manual_logo_index is not None:
-                    print(
-                        f"[{datetime.now().isoformat(timespec='seconds')}] "
-                        "New day: releasing manual logo selection"
-                    )
-
-                manual_logo_index = None
-
-                needs_redraw = True
-
-            # ----------------------------------------------------------
-            # Restart confirmation timeout
-            # ----------------------------------------------------------
-
-            if (
-                restart_armed_name
-                and now >= restart_armed_deadline
-            ):
-                print(
-                    f"[{datetime.now().isoformat(timespec='seconds')}] "
-                    f"Restart confirmation expired for "
-                    f"{restart_armed_name}"
-                )
-
-                restart_armed_name = None
-                needs_redraw = True
-
-            # ----------------------------------------------------------
-            # Docker polling
-            # ----------------------------------------------------------
-
-            due_for_check = (
-                now - last_check_time
-                >= args.interval
+            tick(
+                state,
+                ctx,
+                ser,
+                args.interval,
             )
-
-            if due_for_check or force_refresh:
-
-                last_check_time = now
-
-                new_statuses = (
-                    get_container_statuses(
-                        client,
-                        WATCHED_CONTAINERS,
-                    )
-                )
-
-                new_problems = [
-                    (
-                        name,
-                        status,
-                        healthy,
-                    )
-                    for name, status, healthy
-                    in new_statuses
-                    if is_problem(
-                        status,
-                        healthy,
-                    )
-                ]
-
-                statuses_changed = (
-                    new_statuses != statuses
-                )
-
-                problems_changed = (
-                    new_problems != problems
-                )
-
-                if new_problems and not problems:
-                    breach_count += 1
-
-                    print(
-                        f"[{datetime.now().isoformat(timespec='seconds')}] "
-                        f"Breach #{breach_count}: "
-                        f"{len(new_problems)} container(s) down"
-                    )
-
-                statuses = new_statuses
-                problems = new_problems
-
-                # Only redraw if the information visible on the
-                # display actually changed.
-                if (
-                    statuses_changed
-                    or problems_changed
-                    or force_refresh
-                ):
-                    needs_redraw = True
-
-                force_refresh = False
-
-            # ----------------------------------------------------------
-            # Render
-            # ----------------------------------------------------------
-
-            if needs_redraw:
-
-                img = render_current_view(
-                    current_view=current_view,
-                    statuses=statuses,
-                    problems=problems,
-                    selected_container_idx=(
-                        selected_container_idx
-                    ),
-                    container_scroll_offset=(
-                        container_scroll_offset
-                    ),
-                    restart_armed_name=(
-                        restart_armed_name
-                    ),
-                    manual_logo_index=(
-                        manual_logo_index
-                    ),
-                    breach_count=breach_count,
-                    show_breach_count=show_breach_count,
-                )
-
-                send_frame(
-                    ser,
-                    img,
-                )
-
-                print(
-                    f"[{datetime.now().isoformat(timespec='seconds')}] "
-                    f"Redrew: {current_view}"
-                )
-
-                needs_redraw = False
 
         except Exception as e:
             print(
