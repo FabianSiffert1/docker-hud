@@ -1,7 +1,6 @@
 """Small declarative layout system inspired by Jetpack Compose.
 
     Column
-    Row
     Text
     Bitmap
     Divider
@@ -106,6 +105,9 @@ class Spacer(Component):
     def measure(self, draw, width, height):
         return width, 0
 
+    def render(self, canvas, draw, x, y, width, height):
+        return height
+
 
 class Bitmap(Component):
     def __init__(
@@ -138,164 +140,6 @@ class Bitmap(Component):
         return self.image.height
 
 
-class Row(Component):
-    def __init__(
-        self,
-        children,
-        *,
-        gap=0,
-        padding=0,
-        vertical_align="top",
-    ):
-        self.children = children
-        self.gap = gap
-        self.padding = padding
-        self.vertical_align = vertical_align
-
-    def measure(self, draw, width, height):
-        content_width = max(
-            0,
-            width - self.padding * 2,
-        )
-
-        fixed_width = 0
-        max_height = 0
-        spacer_count = 0
-
-        for child in self.children:
-            if isinstance(child, Spacer):
-                spacer_count += child.weight
-                continue
-
-            child_width, child_height = child.measure(
-                draw,
-                content_width,
-                height,
-            )
-
-            fixed_width += child_width
-            max_height = max(
-                max_height,
-                child_height,
-            )
-
-        fixed_width += self.gap * max(
-            0,
-            len(self.children) - 1,
-        )
-
-        return (
-            min(
-                width,
-                fixed_width + self.padding * 2,
-            ),
-            max_height + self.padding * 2,
-        )
-
-    def render(self, canvas, draw, x, y, width, height):
-        content_x = x + self.padding
-        content_y = y + self.padding
-        content_width = width - self.padding * 2
-        content_height = height - self.padding * 2
-
-        fixed_width = 0
-        spacer_weight = 0
-        child_sizes = []
-
-        for child in self.children:
-            if isinstance(child, Spacer):
-                spacer_weight += child.weight
-                child_sizes.append(
-                    (child, 0, 0)
-                )
-                continue
-
-            child_width, child_height = child.measure(
-                draw,
-                content_width,
-                content_height,
-            )
-
-            fixed_width += child_width
-
-            child_sizes.append(
-                (
-                    child,
-                    child_width,
-                    child_height,
-                )
-            )
-
-        gaps = self.gap * max(
-            0,
-            len(self.children) - 1,
-        )
-
-        remaining_width = max(
-            0,
-            content_width
-            - fixed_width
-            - gaps,
-        )
-
-        spacer_width = (
-            remaining_width / spacer_weight
-            if spacer_weight
-            else 0
-        )
-
-        cursor_x = content_x
-        max_height = 0
-
-        for child, child_width, child_height in child_sizes:
-
-            if isinstance(child, Spacer):
-                cursor_x += int(
-                    spacer_width * child.weight
-                )
-                continue
-
-            if self.vertical_align == "center":
-                child_y = (
-                    content_y
-                    + (
-                        content_height
-                        - child_height
-                    ) // 2
-                )
-
-            elif self.vertical_align == "bottom":
-                child_y = (
-                    content_y
-                    + content_height
-                    - child_height
-                )
-
-            else:
-                child_y = content_y
-
-            child.render(
-                canvas,
-                draw,
-                cursor_x,
-                child_y,
-                child_width,
-                child_height,
-            )
-
-            cursor_x += (
-                child_width
-                + self.gap
-            )
-
-            max_height = max(
-                max_height,
-                child_height,
-            )
-
-        return max_height + self.padding * 2
-
-
 class Column(Component):
     def __init__(
         self,
@@ -303,12 +147,10 @@ class Column(Component):
         *,
         gap=0,
         padding=0,
-        horizontal_align="left",
     ):
         self.children = children
         self.gap = gap
         self.padding = padding
-        self.horizontal_align = horizontal_align
 
     def render(self, canvas, draw, x, y, width, height):
         content_x = x + self.padding
@@ -383,7 +225,7 @@ class Column(Component):
 
         return min(
             height,
-            cursor_y - y + self.padding,
+            cursor_y - y + self.padding * 2,
         )
 
 

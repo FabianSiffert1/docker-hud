@@ -25,7 +25,13 @@ def get_container_statuses(client, watched):
             continue
 
         try:
-            container.reload()
+            status = container.status
+
+            health_info = (
+                container.attrs
+                .get("State", {})
+                .get("Health")
+            )
 
         except Exception:
             results.append(
@@ -33,14 +39,7 @@ def get_container_statuses(client, watched):
             )
             continue
 
-        status = container.status
         health = None
-
-        health_info = (
-            container.attrs
-            .get("State", {})
-            .get("Health")
-        )
 
         if health_info:
             health = (

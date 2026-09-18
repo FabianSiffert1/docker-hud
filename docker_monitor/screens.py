@@ -8,8 +8,10 @@ from .config import (
     WIDTH,
     HEIGHT,
     View,
+    ALERT_VISIBLE_PROBLEMS,
     BREACH_IMAGE_PATH,
     CONTAINER_LIST_VISIBLE_ROWS,
+    NAME_TRUNCATE_LENGTH,
 )
 from .docker_status import is_problem
 from .fonts import get_font
@@ -130,11 +132,14 @@ def container_list_screen(
             healthy,
         )
 
-        marker = (
-            "!!"
-            if problem
-            else "OK"
-        )
+        if problem:
+            marker = "!!"
+
+        elif healthy is None:
+            marker = "--"
+
+        else:
+            marker = "OK"
 
         cursor = (
             ">"
@@ -142,7 +147,7 @@ def container_list_screen(
             else " "
         )
 
-        label = name[:20]
+        label = name[:NAME_TRUNCATE_LENGTH]
 
         if restart_armed_name == name:
             label += " (confirm?)"
@@ -208,7 +213,9 @@ def alert_screen(
             )
         )
 
-    for name, status, healthy in problems[:4]:
+    visible_problems = problems[:ALERT_VISIBLE_PROBLEMS]
+
+    for name, status, healthy in visible_problems:
         reason = (
             "down"
             if status != "running"
@@ -217,8 +224,19 @@ def alert_screen(
 
         children.append(
             Text(
-                f"{name[:18]}: {reason}",
+                f"{name[:NAME_TRUNCATE_LENGTH]}: {reason}",
                 get_font(12),
+                align="center",
+            )
+        )
+
+    hidden = len(problems) - len(visible_problems)
+
+    if hidden > 0:
+        children.append(
+            Text(
+                f"+{hidden} more",
+                get_font(10),
                 align="center",
             )
         )
@@ -232,7 +250,6 @@ def alert_screen(
         children,
         gap=1,
         padding=6,
-        horizontal_align="center",
     )
 
 
@@ -310,7 +327,6 @@ def all_clear_screen(
     return Column(
         children,
         padding=5,
-        horizontal_align="center",
     )
 
 
