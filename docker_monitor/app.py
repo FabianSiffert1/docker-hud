@@ -104,6 +104,8 @@ def main():
 
     manual_logo_index = None
 
+    current_day = datetime.now().date()
+
     selected_container_idx = 0
     container_scroll_offset = 0
 
@@ -366,6 +368,25 @@ def main():
                             ) % len(logos)
 
                             needs_redraw = True
+
+            # ----------------------------------------------------------
+            # Date rollover
+            # ----------------------------------------------------------
+
+            today = datetime.now().date()
+
+            if today != current_day:
+                current_day = today
+
+                if manual_logo_index is not None:
+                    print(
+                        f"[{datetime.now().isoformat(timespec='seconds')}] "
+                        "New day: releasing manual logo selection"
+                    )
+
+                manual_logo_index = None
+
+                needs_redraw = True
 
             # ----------------------------------------------------------
             # Restart confirmation timeout
