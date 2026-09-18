@@ -11,7 +11,6 @@ import serial
 from .config import (
     VIEWS,
     CONTAINER_LIST_VISIBLE_ROWS,
-    DEFAULT_SNOOZE_MINUTES,
     RESTART_CONFIRM_WINDOW_SECONDS,
     WATCHED_CONTAINERS,
 )
@@ -48,13 +47,6 @@ def build_arg_parser():
         type=float,
         default=0.2,
         help="Seconds between button checks",
-    )
-
-    parser.add_argument(
-        "--snooze-minutes",
-        type=int,
-        default=DEFAULT_SNOOZE_MINUTES,
-        help="Alert snooze duration",
     )
 
     return parser
@@ -109,8 +101,8 @@ def main():
     selected_container_idx = 0
     container_scroll_offset = 0
 
-    snooze_until = 0.0
-    last_displayed_snooze_minute = None
+    breach_count = 0
+    show_breach_count = False
 
     restart_armed_name = None
     restart_armed_deadline = 0.0
@@ -180,20 +172,17 @@ def main():
 
                     if current_view == "auto":
 
-                        if problems:
-                            snooze_until = (
-                                now
-                                + args.snooze_minutes * 60
+                        if not problems:
+                            show_breach_count = (
+                                not show_breach_count
                             )
-
-                            last_displayed_snooze_minute = None
 
                             needs_redraw = True
 
                             print(
                                 f"[{datetime.now().isoformat(timespec='seconds')}] "
-                                f"Button C: snoozed for "
-                                f"{args.snooze_minutes}m"
+                                f"Button C: breach count "
+                                f"{'shown' if show_breach_count else 'hidden'}"
                             )
 
                     elif (
@@ -406,43 +395,6 @@ def main():
                 needs_redraw = True
 
             # ----------------------------------------------------------
-            # Snooze timeout / countdown
-            # ----------------------------------------------------------
-
-            if snooze_until:
-
-                if now >= snooze_until:
-                    snooze_until = 0.0
-                    last_displayed_snooze_minute = None
-                    needs_redraw = True
-
-                elif (
-                    current_view == "auto"
-                    and problems
-                ):
-                    # Only redraw when the visible "Xm left"
-                    # value actually changes.
-                    remaining_minute = max(
-                        0,
-                        int(
-                            (
-                                snooze_until
-                                - now
-                            )
-                            / 60
-                        ) + 1,
-                    )
-
-                    if (
-                        remaining_minute
-                        != last_displayed_snooze_minute
-                    ):
-                        last_displayed_snooze_minute = (
-                            remaining_minute
-                        )
-                        needs_redraw = True
-
-            # ----------------------------------------------------------
             # Docker polling
             # ----------------------------------------------------------
 
@@ -484,6 +436,15 @@ def main():
                     new_problems != problems
                 )
 
+                if new_problems and not problems:
+                    breach_count += 1
+
+                    print(
+                        f"[{datetime.now().isoformat(timespec='seconds')}] "
+                        f"Breach #{breach_count}: "
+                        f"{len(new_problems)} container(s) down"
+                    )
+
                 statuses = new_statuses
                 problems = new_problems
 
@@ -520,7 +481,8 @@ def main():
                     manual_logo_index=(
                         manual_logo_index
                     ),
-                    snooze_until=snooze_until,
+                    breach_count=breach_count,
+                    show_breach_count=show_breach_count,
                 )
 
                 send_frame(

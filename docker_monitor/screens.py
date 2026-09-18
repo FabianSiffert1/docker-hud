@@ -25,6 +25,22 @@ def timestamp_component():
     )
 
 
+def breach_count_component(breach_count):
+    label = (
+        "no breaches yet"
+        if breach_count == 0
+        else f"{breach_count} breach"
+        + ("" if breach_count == 1 else "es")
+        + " since boot"
+    )
+
+    return Text(
+        label,
+        get_font(10),
+        align="center",
+    )
+
+
 def stats_screen():
     stats = read_nuc_stats()
 
@@ -161,7 +177,6 @@ def container_list_screen(
 
 def alert_screen(
     problems,
-    snoozed_until=None,
 ):
     children = []
 
@@ -207,26 +222,6 @@ def alert_screen(
             )
         )
 
-    if snoozed_until:
-        remaining_min = max(
-            0,
-            int(
-                (
-                    snoozed_until
-                    - time.time()
-                )
-                / 60
-            ) + 1,
-        )
-
-        children.append(
-            Text(
-                f"snoozed ({remaining_min}m left)",
-                get_font(10),
-                align="center",
-            )
-        )
-
     children.extend([
         Spacer(),
         timestamp_component(),
@@ -242,6 +237,8 @@ def alert_screen(
 
 def all_clear_screen(
     logo_path_override=None,
+    breach_count=0,
+    show_breach_count=False,
 ):
     logo_path = (
         logo_path_override
@@ -253,42 +250,64 @@ def all_clear_screen(
             logo_path,
             target_size=(
                 WIDTH - 10,
-                HEIGHT - 16,
+                HEIGHT - 16 - (
+                    14
+                    if show_breach_count
+                    else 0
+                ),
             ),
         )
 
+        children = [
+            Spacer(),
+
+            Bitmap(
+                logo,
+                align="center",
+            ),
+
+            Spacer(),
+        ]
+
+        if show_breach_count:
+            children.append(
+                breach_count_component(
+                    breach_count
+                )
+            )
+
         return Column(
-            [
-                Spacer(),
-
-                Bitmap(
-                    logo,
-                    align="center",
-                ),
-
-                Spacer(),
-            ],
+            children,
             padding=5,
         )
 
+    children = [
+        Spacer(),
+
+        Text(
+            "X_X",
+            get_font(30),
+            align="center",
+        ),
+        Spacer(),
+        Text(
+            "no logo*.jpg found",
+            get_font(10),
+            align="center",
+        ),
+
+        Spacer(),
+    ]
+
+    if show_breach_count:
+        children.append(
+            breach_count_component(
+                breach_count
+            )
+        )
+
     return Column(
-        [
-            Spacer(),
-
-            Text(
-                "X_X",
-                get_font(30),
-                align="center",
-            ),
-            Spacer(),
-            Text(
-                "no logo*.jpg found",
-                get_font(10),
-                align="center",
-            ),
-
-            Spacer(),
-        ],
+        children,
         padding=5,
         horizontal_align="center",
     )
@@ -302,7 +321,8 @@ def render_current_view(
     container_scroll_offset,
     restart_armed_name,
     manual_logo_index,
-    snooze_until,
+    breach_count=0,
+    show_breach_count=False,
 ):
     if current_view == "containers":
         layout = container_list_screen(
@@ -316,18 +336,9 @@ def render_current_view(
         layout = stats_screen()
 
     else:
-        now = time.time()
-
-        if problems and now >= snooze_until:
+        if problems:
             layout = alert_screen(
                 problems,
-                snoozed_until=None,
-            )
-
-        elif problems and now < snooze_until:
-            layout = alert_screen(
-                problems,
-                snoozed_until=snooze_until,
             )
 
         else:
@@ -344,6 +355,8 @@ def render_current_view(
 
             layout = all_clear_screen(
                 logo_path_override=logo_override,
+                breach_count=breach_count,
+                show_breach_count=show_breach_count,
             )
 
     return render_layout(layout)

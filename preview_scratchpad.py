@@ -59,9 +59,7 @@ preview(
 
 
 # %%
-# Preview the alert screen while snoozed
-import time
-
+# Preview the alert screen
 fake_problems = [
     ("immich_server", "exited", False),
 ]
@@ -69,6 +67,5 @@ fake_problems = [
 preview(
     alert_screen(
         fake_problems,
-        snoozed_until=time.time() + 17 * 60,
     )
 )

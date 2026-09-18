@@ -26,6 +26,5 @@ VIEWS = ["auto", "containers", "stats"]
 
 CONTAINER_LIST_VISIBLE_ROWS = 6
 RESTART_CONFIRM_WINDOW_SECONDS = 10
-DEFAULT_SNOOZE_MINUTES = 30
 
 BUTTON_BYTES = {b"A", b"B", b"C", b"U", b"D"}
