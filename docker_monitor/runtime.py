@@ -2,7 +2,7 @@
 
 from datetime import datetime
 
-from .config import VIEWS
+from .config import VIEWS, CONTAINER_LIST_VISIBLE_ROWS
 
 
 class MonitorState:
@@ -33,6 +33,38 @@ class MonitorState:
     @property
     def current_view(self):
         return VIEWS[self.view_index]
+
+    @property
+    def selected_container(self):
+        if not self.statuses:
+            return None
+
+        if self.selected_container_idx >= len(self.statuses):
+            return None
+
+        return self.statuses[
+            self.selected_container_idx
+        ]
+
+    def clamp_selection(self):
+        if not self.statuses:
+            self.selected_container_idx = 0
+            self.container_scroll_offset = 0
+            return
+
+        last_idx = len(self.statuses) - 1
+
+        if self.selected_container_idx > last_idx:
+            self.selected_container_idx = last_idx
+
+        max_scroll = max(
+            0,
+            len(self.statuses)
+            - CONTAINER_LIST_VISIBLE_ROWS,
+        )
+
+        if self.container_scroll_offset > max_scroll:
+            self.container_scroll_offset = max_scroll
 
 
 class AppContext:

@@ -55,13 +55,13 @@ def handle_c(state, ctx, now):
                 f"{'shown' if state.show_breach_count else 'hidden'}"
             )
 
-    elif (
-        state.current_view == View.CONTAINERS
-        and state.statuses
-    ):
-        target_name = state.statuses[
-            state.selected_container_idx
-        ][0]
+    elif state.current_view == View.CONTAINERS:
+        selected = state.selected_container
+
+        if selected is None:
+            return
+
+        target_name = selected[0]
 
         # Confirm restart
         if (

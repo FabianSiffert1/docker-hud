@@ -3,12 +3,14 @@
 import argparse
 import sys
 import time
+import traceback
 from datetime import datetime
 
 import docker
 import serial
 
 from .buttons import handle_press
+from .config import MAX_CONSECUTIVE_ERRORS
 from .runtime import AppContext, MonitorState
 from .screens import render_current_view
 from .serial_protocol import read_pending_buttons, send_frame
@@ -138,24 +140,51 @@ def main():
     state = MonitorState()
     ctx = AppContext(client)
 
-    while True:
-        try:
-            tick(
-                state,
-                ctx,
-                ser,
-                args.interval,
+    consecutive_errors = 0
+
+    try:
+        while True:
+            try:
+                tick(
+                    state,
+                    ctx,
+                    ser,
+                    args.interval,
+                )
+
+                consecutive_errors = 0
+
+            except serial.SerialException as e:
+                print(
+                    f"Serial link lost on {args.port}: {e}",
+                    file=sys.stderr,
+                )
+
+                sys.exit(1)
+
+            except Exception:
+                consecutive_errors += 1
+
+                traceback.print_exc()
+
+                if consecutive_errors >= MAX_CONSECUTIVE_ERRORS:
+                    print(
+                        f"Giving up after "
+                        f"{consecutive_errors} consecutive errors",
+                        file=sys.stderr,
+                    )
+
+                    sys.exit(1)
+
+            time.sleep(
+                args.button_poll_interval
             )
 
-        except Exception as e:
-            print(
-                f"Error during check: {e}",
-                file=sys.stderr,
-            )
+    except KeyboardInterrupt:
+        print("Stopped.")
 
-        time.sleep(
-            args.button_poll_interval
-        )
+    finally:
+        ser.close()
 
 
 if __name__ == "__main__":

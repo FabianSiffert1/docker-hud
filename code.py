@@ -40,6 +40,10 @@ import usb_cdc
 MAGIC = b"BD"
 HEADER_LEN = 6
 
+MAX_WIDTH = 296
+MAX_HEIGHT = 128
+FRAME_TIMEOUT_SECONDS = 5.0
+
 display = board.DISPLAY
 
 # Uses the dedicated data serial port (see boot_py_addition.txt),
@@ -90,14 +94,18 @@ def check_buttons_and_send():
 
 def read_exact(n):
     buf = bytearray()
+    deadline = time.monotonic() + FRAME_TIMEOUT_SECONDS
     while len(buf) < n:
         chunk = data_serial.read(n - len(buf))
         if chunk:
             buf.extend(chunk)
+            deadline = time.monotonic() + FRAME_TIMEOUT_SECONDS
         else:
             # No data waiting right now — check buttons while we wait,
             # instead of blocking silently until a frame arrives.
             check_buttons_and_send()
+            if time.monotonic() > deadline:
+                raise ValueError("frame timed out, resyncing")
     return bytes(buf)
 
 
@@ -106,6 +114,12 @@ def read_frame():
     magic, width, height = struct.unpack(">2sHH", header)
     if magic != MAGIC:
         raise ValueError("bad magic, resyncing")
+
+    if width < 1 or width > MAX_WIDTH:
+        raise ValueError("bad width, resyncing")
+
+    if height < 1 or height > MAX_HEIGHT:
+        raise ValueError("bad height, resyncing")
 
     row_bytes = (width + 7) // 8
     data_len = row_bytes * height

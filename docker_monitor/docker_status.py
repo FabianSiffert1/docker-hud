@@ -24,7 +24,14 @@ def get_container_statuses(client, watched):
             )
             continue
 
-        container.reload()
+        try:
+            container.reload()
+
+        except Exception:
+            results.append(
+                (name, "missing", False)
+            )
+            continue
 
         status = container.status
         health = None

@@ -45,14 +45,14 @@ def poll_docker(state, ctx, now, interval):
     if not (due_for_check or state.force_refresh):
         return
 
-    state.last_check_time = now
-
     new_statuses = (
         get_container_statuses(
             ctx.client,
             WATCHED_CONTAINERS,
         )
     )
+
+    state.last_check_time = now
 
     new_problems = [
         (
@@ -87,6 +87,8 @@ def poll_docker(state, ctx, now, interval):
 
     state.statuses = new_statuses
     state.problems = new_problems
+
+    state.clamp_selection()
 
     # Only redraw if the information visible on the
     # display actually changed.
