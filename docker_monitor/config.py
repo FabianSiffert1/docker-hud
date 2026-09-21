@@ -13,13 +13,14 @@ BREACH_ICON_PATH = os.path.join(ASSETS_DIR, "mgsAlert.jpg")
 
 WATCHED_CONTAINERS = [
     "immich_redis",
-    "watchtower",
     "mosquitto",
     "homeassistant",
     "zigbee2mqtt",
     "immich_server",
     "immich_postgres",
     "immich_machine_learning",
+    "pihole",
+    "wud",
 ]
 
 
