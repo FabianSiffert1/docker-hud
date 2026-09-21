@@ -38,9 +38,19 @@ def get_daily_logo_path():
         .toordinal()
     )
 
+    yesterday_pick = random.Random(
+        today_seed - 1
+    ).choice(candidates)
+
+    pool = [
+        c
+        for c in candidates
+        if c != yesterday_pick
+    ] or candidates
+
     rng = random.Random(today_seed)
 
-    return rng.choice(candidates)
+    return rng.choice(pool)
 
 
 def list_logos():
