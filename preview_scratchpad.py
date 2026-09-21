@@ -11,12 +11,7 @@ from docker_monitor.screens import (
 
 def preview(layout, *, scale=4):
     """Render a layout and display it at a useful preview size."""
-    invert = False
-
-    if isinstance(layout, tuple):
-        layout, invert = layout
-
-    img = render_layout(layout, invert=invert)
+    img = render_layout(layout)
 
     width, height = img.size
 
