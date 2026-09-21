@@ -15,7 +15,12 @@ from .config import (
 )
 from .docker_status import is_problem
 from .fonts import get_font
-from .images import get_daily_logo_path, list_logos, logo_to_eink
+from .images import (
+    get_daily_logo_path,
+    list_logos,
+    logo_to_eink,
+    should_invert,
+)
 from .layout import Bitmap, Column, Divider, Spacer, Text, render_layout
 from .stats import read_nuc_stats
 
@@ -276,6 +281,8 @@ def all_clear_screen(
             ),
         )
 
+        invert = should_invert(logo)
+
         children = [
             Spacer(),
 
@@ -294,9 +301,12 @@ def all_clear_screen(
                 )
             )
 
-        return Column(
-            children,
-            padding=5,
+        return (
+            Column(
+                children,
+                padding=5,
+            ),
+            invert,
         )
 
     children = [
@@ -324,9 +334,12 @@ def all_clear_screen(
             )
         )
 
-    return Column(
-        children,
-        padding=5,
+    return (
+        Column(
+            children,
+            padding=5,
+        ),
+        False,
     )
 
 
@@ -341,6 +354,8 @@ def render_current_view(
     breach_count=0,
     show_breach_count=False,
 ):
+    invert = False
+
     if current_view == View.CONTAINERS:
         layout = container_list_screen(
             statuses,
@@ -370,10 +385,10 @@ def render_current_view(
                         % len(logos)
                     ]
 
-            layout = all_clear_screen(
+            layout, invert = all_clear_screen(
                 logo_path_override=logo_override,
                 breach_count=breach_count,
                 show_breach_count=show_breach_count,
             )
 
-    return render_layout(layout)
+    return render_layout(layout, invert=invert)

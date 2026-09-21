@@ -6,7 +6,10 @@ from datetime import datetime
 
 from PIL import Image
 
-from .config import LOGO_GLOB_PATTERN
+from .config import (
+    LOGO_GLOB_PATTERN,
+    LOGO_INVERT_INK_THRESHOLD,
+)
 
 
 def logo_to_eink(path, target_size):
@@ -22,6 +25,28 @@ def logo_to_eink(path, target_size):
     ).convert("1")
 
     return img_1bit
+
+
+def ink_ratio(img_1bit):
+    pixels = list(img_1bit.getdata())
+
+    if not pixels:
+        return 0.0
+
+    black = sum(
+        1
+        for p in pixels
+        if p == 0
+    )
+
+    return black / len(pixels)
+
+
+def should_invert(img_1bit):
+    return (
+        ink_ratio(img_1bit)
+        < LOGO_INVERT_INK_THRESHOLD
+    )
 
 
 def get_daily_logo_path():

@@ -7,7 +7,7 @@
     Spacer
 """
 
-from PIL import Image, ImageDraw
+from PIL import Image, ImageDraw, ImageOps
 
 from .config import WIDTH, HEIGHT
 
@@ -229,7 +229,7 @@ class Column(Component):
         )
 
 
-def render_layout(layout):
+def render_layout(layout, invert=False):
     img = Image.new(
         "1",
         (WIDTH, HEIGHT),
@@ -246,5 +246,10 @@ def render_layout(layout):
         WIDTH,
         HEIGHT,
     )
+
+    if invert:
+        img = ImageOps.invert(
+            img.convert("L")
+        ).convert("1")
 
     return img
